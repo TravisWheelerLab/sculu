@@ -2141,19 +2141,19 @@ fn msa_dna(input_file: &Path, num_threads: usize) -> Result<PathBuf> {
     let refiner = which("Refiner").map_err(|e| anyhow!("Refiner: {e}"))?;
 
     let mut refiner_args = vec![
-        "-debug".to_string(),
+        //"-debug".to_string(),
         "-threads".to_string(),
         num_threads.to_string(),
     ];
 
-    let rmblast = which("rmblastn").map_err(|e| anyhow!("rmblastn: {e}"))?;
-    if let Some(rmblast_dir) = rmblast
-        .as_path()
-        .parent()
-        .map(|path| path.to_string_lossy().to_string())
-    {
-        refiner_args.extend_from_slice(&["--rmblast_dir".to_string(), rmblast_dir]);
-    }
+    //let rmblast = which("rmblastn").map_err(|e| anyhow!("rmblastn: {e}"))?;
+    //if let Some(rmblast_dir) = rmblast
+    //    .as_path()
+    //    .parent()
+    //    .map(|path| path.to_string_lossy().to_string())
+    //{
+    //    refiner_args.extend_from_slice(&["--rmblast_dir".to_string(), rmblast_dir]);
+    //}
 
     refiner_args.push(input_file.to_string_lossy().to_string());
     debug!(
