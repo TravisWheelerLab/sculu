@@ -720,13 +720,18 @@ fn take_best_alignments(
             let subject_span = 1 + record.subject_end.abs_diff(record.subject_start);
             let query_coverage = query_span as f64 / record.query_len as f64;
             let subject_coverage = subject_span as f64 / record.subject_len as f64;
-            let equiv_len = min(query_span, subject_span) as f64
+            let are_equiv_len = min(query_span, subject_span) as f64
                 >= (config.general.min_len_similarity
                     * max(query_span, subject_span) as f64);
+            dbg!(&query_span);
+            dbg!(&subject_span);
+            dbg!(&query_coverage);
+            dbg!(&subject_coverage);
+            dbg!(&are_equiv_len);
 
             if query_coverage >= config.general.min_align_cover
                 && subject_coverage >= config.general.min_align_cover
-                && equiv_len
+                && are_equiv_len
             {
                 let pair = StringPair(record.query.clone(), record.target.clone());
 
@@ -2001,7 +2006,7 @@ fn merge_families(
     let new_family_path = tempfile::Builder::new()
         .prefix("inst-")
         .suffix(".fa")
-        .disable_cleanup(true)
+        //.disable_cleanup(true)
         .tempfile_in(args.taken_instances_dir)?
         .path()
         .to_path_buf();
