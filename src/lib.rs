@@ -19,7 +19,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp::{max, min},
+    cmp::max,
     collections::{HashMap, HashSet},
     fmt,
     fs::{self, File},
@@ -213,6 +213,7 @@ struct GeneralConfig {
     confidence_margin: isize,
     independence_threshold: f64,
     lambda: f64,
+    percent_id_for_components: f64,
     max_num_instances: usize,
     min_align_cover: f64,
     min_consensus_coverage: usize,
@@ -365,6 +366,7 @@ fn default_config() -> Config {
             confidence_margin: 3,
             independence_threshold: 0.5,
             lambda: 0.1227,
+            percent_id_for_components: 0.70,
             max_num_instances: 100,
             min_align_cover: 0.9,
             min_consensus_coverage: 5,
@@ -716,24 +718,25 @@ fn take_best_alignments(
 
             // The coverage of the hits to either the query or subject must
             // be at least half of the sequence length.
-            let query_span = 1 + record.query_end.abs_diff(record.query_start);
-            let subject_span = 1 + record.subject_end.abs_diff(record.subject_start);
-            let query_coverage = query_span as f64 / record.query_len as f64;
-            let subject_coverage = subject_span as f64 / record.subject_len as f64;
-            let are_equiv_len = min(query_span, subject_span) as f64
-                >= (config.general.min_len_similarity
-                    * max(query_span, subject_span) as f64);
-            dbg!(&query_span);
-            dbg!(&subject_span);
-            dbg!(&query_coverage);
-            dbg!(&subject_coverage);
-            dbg!(&are_equiv_len);
+            //let query_span = 1 + record.query_end.abs_diff(record.query_start);
+            //let subject_span = 1 + record.subject_end.abs_diff(record.subject_start);
+            //let query_coverage = query_span as f64 / record.query_len as f64;
+            //let subject_coverage = subject_span as f64 / record.subject_len as f64;
+            //let are_equiv_len = min(query_span, subject_span) as f64
+            //    >= (config.general.min_len_similarity
+            //        * max(query_span, subject_span) as f64);
+            //if query_coverage >= config.general.min_align_cover
+            //    && subject_coverage >= config.general.min_align_cover
+            //    && are_equiv_len
+            //{
+            debug!(
+                "target = {}, query = {}, pident = {}",
+                record.target, record.query, record.pident
+            );
 
-            if query_coverage >= config.general.min_align_cover
-                && subject_coverage >= config.general.min_align_cover
-                && are_equiv_len
-            {
+            if record.pident >= config.general.percent_id_for_components * 100.0 {
                 let pair = StringPair(record.query.clone(), record.target.clone());
+                debug!("ADDING {:?}", pair);
 
                 if let Some(val) = taken.get_mut(&pair) {
                     if val.score > record.score {
@@ -916,6 +919,7 @@ fn merge_component(
             config.general.lambda,
             config.general.confidence_margin,
         )?;
+        debug!("winners = {:#?}", winners);
 
         // Determine independence of all pairs
         let pair_independence = independence(winners);
@@ -1425,6 +1429,7 @@ fn call_winners(
             // The permutations will include A/B and B/A
             // It's important to store the symmetrical keys
             // Even though this is a duplication of the data
+            // So don't use StringPair::new, Ken.
             for pair in winning_set.into_iter().permutations(2) {
                 if let [&f1, &f2] = pair[..] {
                     let key = StringPair(f1.to_string(), f2.to_string());
@@ -1786,6 +1791,7 @@ fn downsample(
     fasta: &PathBuf,
     num_wanted: usize,
     rev_comp: bool,
+    start_numbering_at: usize,
     mut output: impl Write,
 ) -> Result<usize> {
     let mut reader = parse_reader(open(fasta)?)?;
@@ -1803,7 +1809,8 @@ fn downsample(
         }
         writeln!(
             output,
-            ">{}{}\n{}",
+            ">{} {}{}\n{}",
+            start_numbering_at + num_taken,
             rec.head(),
             rec.des(),
             if rev_comp {
@@ -2019,7 +2026,7 @@ fn merge_families(
     // Block to isolate "output" and force close when passing out of scope
     {
         let mut output = open_for_write(&new_family_path)?;
-        let mut total_taken = 0;
+        let mut total_taken: usize = 0;
         let mut one_flipped = false;
         for (fam, num) in &[(f1, num_from1), (f2, num_from2)] {
             let fasta = family_to_instance
@@ -2031,7 +2038,7 @@ fn merge_families(
             } else {
                 false
             };
-            total_taken += downsample(fasta, *num, flip, &mut output)?;
+            total_taken += downsample(fasta, *num, flip, total_taken, &mut output)?;
         }
 
         if total_taken == 0 {
@@ -2433,7 +2440,7 @@ mod tests {
             let out = File::create(&outpath)?;
 
             // Select 3 of the 5 sequences
-            let res = downsample(&fasta, 3, rev_comp, &out);
+            let res = downsample(&fasta, 3, rev_comp, 0, &out);
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), 3);
         }
@@ -2454,7 +2461,7 @@ mod tests {
         // Should only get the actual 5
         {
             let out = File::create(&outpath)?;
-            let res = downsample(&fasta, 10, rev_comp, &out);
+            let res = downsample(&fasta, 10, rev_comp, 0, &out);
             assert!(res.is_ok());
             assert_eq!(res.unwrap(), 5);
         }
