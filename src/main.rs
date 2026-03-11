@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
-use sculu::{Cli, ClusterArgs, Command, ComponentsArgs};
+use sculu::types::{Cli, ClusterArgs, Command, ComponentsArgs};
 use std::{
     fs::{self, File},
     io::BufWriter,
@@ -60,16 +60,18 @@ fn run(args: Cli) -> Result<()> {
             Ok(())
         }
         Command::Run(args) => {
+            let intermediate_dir = args.outdir.join("intermediate");
             let built_components = sculu::build_components(
                 &ComponentsArgs {
                     alphabet: args.alphabet.clone(),
                     consensi: args.consensi.clone(),
                     instances: args.instances.clone(),
-                    outdir: args.outdir.clone(),
+                    outdir: intermediate_dir.clone(),
                     config: args.config.clone(),
                 },
                 num_threads,
             )?;
+            dbg!(&built_components);
 
             let mut merged: Vec<PathBuf> = vec![];
             for component in built_components.components {
@@ -79,7 +81,7 @@ fn run(args: Cli) -> Result<()> {
                         consensi: built_components.consensi.clone(),
                         alignments: built_components.alignments.clone(),
                         instances: built_components.instances_dir.clone(),
-                        outdir: args.outdir.clone(),
+                        outdir: intermediate_dir.clone(),
                         config: args.config.clone(),
                         component,
                     },
@@ -88,12 +90,14 @@ fn run(args: Cli) -> Result<()> {
 
                 merged.push(res);
             }
+            dbg!(&merged);
 
+            let outfile = args.outdir.join("sculu_families.fa");
             sculu::concat_files(
                 &built_components.consensi,
                 &built_components.singletons,
                 &merged,
-                &args.outfile,
+                &outfile,
             )?;
 
             Ok(())
