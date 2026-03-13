@@ -1,11 +1,11 @@
 use crate::{
     common::{
         copy_fasta, format_seconds, get_config, open, open_for_write,
-        read_instances_dir, read_lines, run_blastp, run_rmblastn,
+        read_instances_dir, read_lines, run_blastp, run_cmd, run_rmblastn,
     },
     types::{
-        AlignedConsensusPair, AlignmentScore, ClusterArgs, Config, Independence,
-        MergeFamilies, RmBlastOutput, SequenceAlphabet, StringPair, Winners,
+        AlignedConsensusPair, AlignmentScore, ClusterArgs, ClusterResult, Independence,
+        MergeFamilies, MsaResult, RmBlastOutput, SequenceAlphabet, StringPair, Winners,
     },
 };
 use anyhow::{anyhow, bail, Result};
@@ -22,12 +22,16 @@ use std::{
     fs,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    process::Command,
     time::Instant,
 };
 use which::which;
 
 // --------------------------------------------------
-pub fn cluster_component(args: &ClusterArgs, num_threads: usize) -> Result<PathBuf> {
+pub fn cluster_component(
+    args: &ClusterArgs,
+    num_threads: usize,
+) -> Result<ClusterResult> {
     let config = get_config(&args.config)?;
 
     if !&args.outdir.is_dir() {
@@ -37,26 +41,8 @@ pub fn cluster_component(args: &ClusterArgs, num_threads: usize) -> Result<PathB
     // If given an component file to process, assume the
     // consensus and instances have been properly filtered
     // and use given args as-is.
-    let family_to_instance = read_instances_dir(&args.instances)?;
+    let mut family_to_instance = read_instances_dir(&args.instances)?;
 
-    let merged = merge_component(args, &config, family_to_instance, num_threads)?;
-
-    debug!(
-        "'{}' merged into '{}'",
-        args.component.display(),
-        merged.display()
-    );
-
-    Ok(merged)
-}
-
-// --------------------------------------------------
-fn merge_component(
-    args: &ClusterArgs,
-    config: &Config,
-    mut family_to_instance: HashMap<String, PathBuf>,
-    num_threads: usize,
-) -> Result<PathBuf> {
     debug!("Merging component '{}'", args.component.display());
 
     let filename_re = Regex::new(r"component-(\d+)").unwrap();
@@ -152,6 +138,7 @@ fn merge_component(
         consensus_path.display()
     );
     let mut consensus_seqs = number_fasta(&batch_consensus, &consensus_path)?;
+    let mut family_to_msa: HashMap<String, PathBuf> = HashMap::new();
     batch_consensus = consensus_path;
 
     // Start merging
@@ -159,7 +146,7 @@ fn merge_component(
     let mut prev_scores: Option<PathBuf> = None;
     let mut next_family_number = 1;
     let mut sculu_name_to_desc: HashMap<String, String> = HashMap::new();
-    //let mut prev_msa_result: Option<PathBuf> = None;
+
     for round in 1.. {
         debug!(">>> Round {round} <<<");
         let round_dir = batch_dir.join(format!("round{round:03}"));
@@ -173,14 +160,14 @@ fn merge_component(
                 &round_dir,
                 &batch_consensus,
                 all_seqs_path,
-                config,
+                &config,
                 num_threads,
             )?,
             _ => run_blastp(
                 &round_dir,
                 &batch_consensus,
                 all_seqs_path,
-                config,
+                &config,
                 num_threads,
             )?,
         };
@@ -236,7 +223,8 @@ fn merge_component(
         // Merge the least independent families.
         // The new consensus file will only contain the merged families.
         let new_consensus_path = &round_dir.join("new-consensus.fa");
-        let mut new_consensus = open_for_write(new_consensus_path)?;
+        let mut new_consensus_fh = open_for_write(new_consensus_path)?;
+
         let mut merge_num = 0;
         let mut already_merged: HashSet<String> = HashSet::new();
         for pair in non_independent {
@@ -276,7 +264,7 @@ fn merge_component(
 
             // Place all merge artefacts into a directory.
             let msa_dir = &round_dir.join(format!("msa-{merge_num:02}"));
-            let new_consensus_seq = merge_families(
+            let merged_consensus = merge_families(
                 MergeFamilies {
                     family1: pair.f1.clone(),
                     family2: pair.f2.clone(),
@@ -294,8 +282,6 @@ fn merge_component(
             let f2_desc = sculu_name_to_desc.get(&pair.f2).unwrap_or(&pair.f2);
             let new_family_newick = format!(
                 "({},{}):{:0.02};",
-                //trailing_semi.replace(&pair.f1, ""),
-                //trailing_semi.replace(&pair.f2, ""),
                 trailing_semi.replace(f1_desc, ""),
                 trailing_semi.replace(f2_desc, ""),
                 pair.val
@@ -303,7 +289,7 @@ fn merge_component(
 
             let f1_len = consensus_seqs.get(&pair.f1).map_or(0, |v| v.len());
             let f2_len = consensus_seqs.get(&pair.f2).map_or(0, |v| v.len());
-            let new_len = new_consensus_seq.len();
+            let new_len = merged_consensus.consensus_seq.len();
 
             debug!(
                 "{} len was {f1_len}, {} len was {f2_len}, \
@@ -314,7 +300,18 @@ fn merge_component(
             // Update the consensus mapping
             consensus_seqs.remove(&pair.f1);
             consensus_seqs.remove(&pair.f2);
-            consensus_seqs.insert(new_family_newick, new_consensus_seq.clone());
+            consensus_seqs.insert(
+                new_family_newick.clone(),
+                merged_consensus.consensus_seq.clone(),
+            );
+
+            if let Some(msa_path) = merged_consensus.msa_path {
+                debug!(
+                    r#"Adding MSA "{}" for "{new_family_newick}""#,
+                    msa_path.display()
+                );
+                let _ = family_to_msa.insert(new_family_newick, msa_path);
+            }
 
             // Keep track of all the families that have been merged
             for family in all_families {
@@ -329,42 +326,51 @@ fn merge_component(
             new_consensus_path.display()
         );
 
-        //for (family_number, (family_name, seq)) in consensus_seqs.iter().enumerate() {
         for (family_name, seq) in consensus_seqs.iter() {
             let sculu_name = format!("sculufam{component_number}-{next_family_number}");
             let _ = sculu_name_to_desc
                 .insert(sculu_name.to_string(), family_name.to_string());
-            writeln!(new_consensus, ">{sculu_name} {family_name}\n{seq}",)?;
+            writeln!(new_consensus_fh, ">{sculu_name} {family_name}\n{seq}",)?;
             next_family_number += 1;
         }
 
         batch_consensus = new_consensus_path.to_path_buf();
     }
 
+    debug!("family_to_msa = {family_to_msa:#?}");
+
     let outfile = batch_dir.join("final.fa");
     let mut final_writer = FastaWriter::new(BufWriter::new(open_for_write(&outfile)?));
     let mut reader = FastaReader::new(open(&batch_consensus)?);
     let mut new_seqs = 0;
+    let mut final_msa: HashMap<String, PathBuf> = HashMap::new();
     for result in reader.records() {
-        //let mut record = result?;
-        //if let Some(desc) = record.description() {
-        //    record = FastaRecord::new(
-        //        FastaDefinition::new(desc, None),
-        //        record.sequence().clone(),
-        //    )
-        //}
         let record = result?;
         final_writer.write_record(&record)?;
+        let sculu_name = String::from_utf8(record.name().to_vec())?;
+        if let Some(desc) = record.description() {
+            let family_name = desc.to_string();
+            debug!(r#"Get MSA for family "{family_name}" ({sculu_name})"#);
+            if let Some(msa_path) = family_to_msa.get(&family_name) {
+                let family_msa_path = batch_dir.join(format!("{sculu_name}.stk"));
+                fs::copy(msa_path, &family_msa_path)?;
+                final_msa.insert(sculu_name, family_msa_path);
+            }
+        }
         new_seqs += 1;
     }
 
     debug!(
-        "Added {new_seqs} famil{} in {}.",
+        r#"Added {new_seqs} famil{} to "{}" in {}."#,
         if new_seqs == 1 { "y" } else { "ies" },
+        outfile.display(),
         format_seconds(start.elapsed().as_secs()),
     );
 
-    Ok(outfile)
+    Ok(ClusterResult {
+        consensus_path: outfile,
+        family_to_msa: final_msa,
+    })
 }
 
 // --------------------------------------------------
@@ -412,7 +418,7 @@ fn cat_sequences(
 fn merge_families(
     args: MergeFamilies,
     family_to_instance: &mut HashMap<String, PathBuf>,
-) -> Result<String> {
+) -> Result<MsaResult> {
     fs::create_dir_all(&args.outdir)?;
 
     let fams1 = parse_newick(&args.family1);
@@ -471,47 +477,26 @@ fn merge_families(
     let msa_input = args.outdir.join("msa-input.fa");
     fs::copy(new_family_path, &msa_input)?;
 
-    let consensus_path = match args.alphabet {
-        SequenceAlphabet::Dna => msa_dna(&msa_input, args.num_threads)?,
-        _ => msa_protein(&msa_input, args.num_threads)?,
-    };
-
-    let mut reader = parse_reader(open(&consensus_path)?)?;
-    let consensus_seq = reader
-        .iter_record()?
-        .map(|rec| rec.seq().to_string())
-        .expect("Failed to read consensus file");
-
-    Ok(consensus_seq)
+    match args.alphabet {
+        SequenceAlphabet::Dna => msa_dna(&msa_input, args.num_threads),
+        _ => msa_protein(&msa_input, args.num_threads),
+    }
 }
 
 // --------------------------------------------------
-fn msa_protein(input_file: &Path, num_threads: usize) -> Result<PathBuf> {
+fn msa_protein(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
     let mafft = which("mafft").map_err(|e| anyhow!("mafft: {e}"))?;
     let hmmbuild = which("hmmbuild").map_err(|e| anyhow!("hmmbuild: {e}"))?;
     let hmmemit = which("hmmemit").map_err(|e| anyhow!("hmmemit: {e}"))?;
 
-    // mafft creates MSA
-    let start = Instant::now();
-    let mut mafft_cmd = std::process::Command::new(&mafft);
-    let mafft_args = &[
+    let mut cmd = Command::new(&mafft);
+    cmd.args(&[
         "--auto".to_string(),
         "--thread".to_string(),
         num_threads.to_string(),
         input_file.to_string_lossy().to_string(),
-    ];
-    debug!(r#"Running "{} {}""#, mafft.display(), mafft_args.join(" "));
-    let res = mafft_cmd.args(mafft_args).output()?;
-
-    if !res.status.success() {
-        debug!("{}", String::from_utf8(res.stdout)?);
-        bail!(String::from_utf8(res.stderr)?);
-    }
-
-    debug!(
-        "Mafft finished in {}",
-        format_seconds(start.elapsed().as_secs())
-    );
+    ]);
+    let res = run_cmd(cmd)?;
 
     let outdir = input_file.parent().unwrap_or_else(|| {
         panic!("Failed to get parent dir for {}", input_file.display())
@@ -525,49 +510,31 @@ fn msa_protein(input_file: &Path, num_threads: usize) -> Result<PathBuf> {
 
     // hmmerbuild create HMM
     let hmm_out = outdir.join("hmm.out");
-    let mut hmmbuild_cmd = std::process::Command::new(&hmmbuild);
-    let hmmbuild_args = &[
+    let mut cmd = Command::new(&hmmbuild);
+    cmd.args(&[
         hmm_out.to_string_lossy().to_string(),
         msa_path.to_string_lossy().to_string(),
-    ];
-    let res = hmmbuild_cmd.args(hmmbuild_args).output()?;
-    debug!(
-        r#"Running "{} {}""#,
-        hmmbuild.display(),
-        hmmbuild_args.join(" ")
-    );
-
-    if !res.status.success() {
-        debug!("{}", String::from_utf8(res.stdout)?);
-        bail!(String::from_utf8(res.stderr)?);
-    }
+    ]);
+    let _ = run_cmd(cmd)?;
 
     // hmmeremit generates a consensus sequence
-    let mut hmmemit_cmd = std::process::Command::new(&hmmemit);
-    let hmmemit_args = &["-c".to_string(), hmm_out.to_string_lossy().to_string()];
-    let res = hmmemit_cmd.args(hmmemit_args).output()?;
-    debug!(
-        r#"Running "{} {}""#,
-        hmmemit.display(),
-        hmmemit_args.join(" ")
-    );
+    let mut cmd = Command::new(&hmmemit);
+    cmd.args(&["-c".to_string(), hmm_out.to_string_lossy().to_string()]);
+    let res = run_cmd(cmd)?;
 
-    if !res.status.success() {
-        debug!("{}", String::from_utf8(res.stdout)?);
-        bail!(String::from_utf8(res.stderr)?);
-    }
-
+    let consensus_seq = String::from_utf8(res.stdout)?;
     let consensus_path = outdir.join("consensus.fa");
-    {
-        let mut file = open_for_write(&consensus_path)?;
-        write!(file, "{}", String::from_utf8(res.stdout)?)?;
-    }
+    fs::write(&consensus_path, &consensus_seq)?;
 
-    Ok(consensus_path)
+    Ok(MsaResult {
+        consensus_seq,
+        consensus_path,
+        msa_path: None,
+    })
 }
 
 // --------------------------------------------------
-fn msa_dna(input_file: &Path, num_threads: usize) -> Result<PathBuf> {
+fn msa_dna(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
     let refiner = which("Refiner").map_err(|e| anyhow!("Refiner: {e}"))?;
 
     let mut refiner_args = vec![
@@ -586,37 +553,34 @@ fn msa_dna(input_file: &Path, num_threads: usize) -> Result<PathBuf> {
     //}
 
     refiner_args.push(input_file.to_string_lossy().to_string());
-    debug!(
-        r#"Running "{} {}""#,
-        &refiner.display(),
-        &refiner_args.join(" ")
-    );
+    let mut cmd = Command::new(&refiner);
+    cmd.args(refiner_args);
+    debug!("Running {cmd:?}");
 
-    let start = Instant::now();
-    let mut cmd = std::process::Command::new(&refiner);
-    let res = cmd.args(refiner_args).output()?;
-    if !res.status.success() {
-        debug!("{}", String::from_utf8(res.stdout)?);
-        bail!(String::from_utf8(res.stderr)?);
-    }
-
-    debug!(
-        "Refiner finished in {}",
-        format_seconds(start.elapsed().as_secs())
-    );
+    let _ = run_cmd(cmd)?;
 
     let outdir = input_file.parent().unwrap_or_else(|| {
         panic!("Failed to get parent dir for {}", input_file.display())
     });
     let consensus_path = outdir.join("msa-input.fa.refiner_cons");
-    if !consensus_path.exists() {
-        bail!(
-            "Failed to find expected consensus file {}",
-            consensus_path.display()
-        );
+    let msa_path = outdir.join("msa-input.fa.refiner.stk");
+    for path in [&consensus_path, &msa_path] {
+        if !path.exists() {
+            bail!(r#"Failed to find expected "{}""#, path.display());
+        }
     }
 
-    Ok(consensus_path)
+    let mut reader = parse_reader(open(&consensus_path)?)?;
+    let consensus_seq = reader
+        .iter_record()?
+        .map(|rec| rec.seq().to_string())
+        .expect("Failed to read consensus file");
+
+    Ok(MsaResult {
+        consensus_seq,
+        consensus_path,
+        msa_path: Some(msa_path),
+    })
 }
 
 // --------------------------------------------------
@@ -767,7 +731,7 @@ fn extract_scores(
     outdir: &Path,
 ) -> Result<PathBuf> {
     debug!(
-        "Extracting scores from alignment '{}' {:?}",
+        r#"Extracting scores from alignment "{}" {:?}""#,
         alignment_file.display(),
         prev_scores_file
     );
@@ -778,7 +742,6 @@ fn extract_scores(
         consensus_names
             .insert(rec.head().trim().to_string(), rec.des().trim().to_string());
     }
-    debug!("consensus_names = {consensus_names:#?}");
 
     let scores_file = outdir.join("alignment-scores.tsv");
     let mut scores_wtr = csv::WriterBuilder::new()

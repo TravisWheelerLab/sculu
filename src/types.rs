@@ -2,23 +2,21 @@ use clap::{builder::PossibleValue, Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, path::PathBuf};
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SequenceAlphabet {
-    Dna,
-    Protein,
-}
+/// SCULU subfamily clustering tool
+#[derive(Parser, Debug)]
+#[command(arg_required_else_help = true, version, about)]
+pub struct Cli {
+    /// SCULU command
+    #[command(subcommand)]
+    pub command: Option<Command>,
 
-impl ValueEnum for SequenceAlphabet {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[SequenceAlphabet::Dna, SequenceAlphabet::Protein]
-    }
+    /// Log output
+    #[arg(long, value_name = "LOGFILE")]
+    pub logfile: Option<PathBuf>,
 
-    fn to_possible_value<'a>(&self) -> Option<PossibleValue> {
-        Some(match self {
-            SequenceAlphabet::Dna => PossibleValue::new("dna"),
-            SequenceAlphabet::Protein => PossibleValue::new("protein"),
-        })
-    }
+    /// Number of threads for rmblastn/Refiner
+    #[arg(long, value_name = "THREADS")]
+    pub num_threads: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -37,23 +35,6 @@ pub enum Command {
 
     /// Run all steps (build components, cluster, concat)
     Run(RunArgs),
-}
-
-/// SCULU subfamily clustering tool
-#[derive(Parser, Debug)]
-#[command(arg_required_else_help = true, version, about)]
-pub struct Cli {
-    /// SCULU command
-    #[command(subcommand)]
-    pub command: Option<Command>,
-
-    /// Log output
-    #[arg(long, value_name = "LOGFILE")]
-    pub logfile: Option<PathBuf>,
-
-    /// Number of threads for rmblastn/Refiner
-    #[arg(long, value_name = "THREADS")]
-    pub num_threads: Option<usize>,
 }
 
 #[derive(Debug, Parser)]
@@ -91,10 +72,9 @@ pub struct RunArgs {
     #[arg(long, value_name = "CONSENSUS", required = true)]
     pub consensus: PathBuf,
 
-    /// Directory of seed alignments for each subfamily
+    /// Directory of seed alignments (MSA) for each subfamily
     #[arg(long, value_name = "ALIGNMENTS", required = true)]
-    //pub seed_alignments: PathBuf,
-    pub instances: PathBuf,
+    pub alignments: PathBuf,
 
     /// Sequence alphabet
     #[arg(short, long, value_name = "ALPHABET", required = true)]
@@ -120,10 +100,9 @@ pub struct ComponentsArgs {
     #[arg(long, value_name = "CONSENSUS", required = true)]
     pub consensus: PathBuf,
 
-    /// Directory of seed alignments for each subfamily
+    /// Directory of seed alignments (MSA) for each subfamily
     #[arg(long, value_name = "ALIGNMENTS", required = true)]
-    //pub seed_alignments: PathBuf,
-    pub instances: PathBuf,
+    pub alignments: PathBuf,
 
     /// Output directory
     #[arg(long, value_name = "OUTDIR", default_value = "sculu-out")]
@@ -293,8 +272,8 @@ pub struct BuiltComponents {
 pub struct StringPair(pub String, pub String);
 
 impl StringPair {
+    // Stores the strings in ascending order
     pub fn new(s1: String, s2: String) -> StringPair {
-        // Store the strings in ascending order
         if s1 < s2 {
             StringPair(s1, s2)
         } else {
@@ -353,4 +332,36 @@ pub struct SelectInstancesArgs<'a> {
     pub alphabet: &'a SequenceAlphabet,
     pub config: &'a Config,
     pub num_threads: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SequenceAlphabet {
+    Dna,
+    Protein,
+}
+
+impl ValueEnum for SequenceAlphabet {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[SequenceAlphabet::Dna, SequenceAlphabet::Protein]
+    }
+
+    fn to_possible_value<'a>(&self) -> Option<PossibleValue> {
+        Some(match self {
+            SequenceAlphabet::Dna => PossibleValue::new("dna"),
+            SequenceAlphabet::Protein => PossibleValue::new("protein"),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct MsaResult {
+    pub consensus_seq: String,
+    pub consensus_path: PathBuf,
+    pub msa_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub struct ClusterResult {
+    pub consensus_path: PathBuf,
+    pub family_to_msa: HashMap<String, PathBuf>,
 }

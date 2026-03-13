@@ -41,30 +41,45 @@ fn run(args: Cli) -> Result<()> {
         })
         .init();
 
+    let start = Instant::now();
     match &args.command.expect("Missing command") {
         Command::Config(args) => {
             sculu::write_config(args)?;
-            println!(r#"Wrote "{}""#, args.outfile.display());
+            println!(r#"Wrote config file to "{}""#, args.outfile.display());
             Ok(())
         }
         Command::Components(args) => {
             sculu::build_components::build(args, num_threads)?;
+            println!(
+                r#"Wrote output to "{}" in {}."#,
+                args.outdir.display(),
+                format_seconds(start.elapsed().as_secs()),
+            );
             Ok(())
         }
         Command::Cluster(args) => {
             sculu::cluster::cluster_component(args, num_threads)?;
+            println!(
+                r#"Wrote output to "{}" in {}."#,
+                args.outdir.display(),
+                format_seconds(start.elapsed().as_secs()),
+            );
             Ok(())
         }
         Command::Concat(args) => {
             sculu::concat_files(args)?;
+            println!(
+                r#"Wrote output to "{}" in {}."#,
+                args.outfile.display(),
+                format_seconds(start.elapsed().as_secs()),
+            );
             Ok(())
         }
         Command::Run(args) => {
             // Do all the things!
-            let start = Instant::now();
             sculu::run_sculu(args, num_threads)?;
             println!(
-                "Wrote output to {} in {}",
+                r#"Wrote output to "{}" in {}."#,
                 args.outdir.display(),
                 format_seconds(start.elapsed().as_secs()),
             );

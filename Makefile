@@ -4,11 +4,11 @@ fly:
 	rm -rf $(FLY)/sculu-out
 	cargo run -- --logfile minifly.log \
 		run \
-		--alphabet  dna \
-		--consensus $(FLY)/consensi.fa \
-		--instances $(FLY)/seed_alignments \
-		--config    $(FLY)/sculu.toml \
-		--outdir    $(FLY)/sculu-out
+		--alphabet   dna \
+		--consensus  $(FLY)/consensi.fa \
+		--alignments $(FLY)/seed_alignments \
+		--config     $(FLY)/sculu.toml \
+		--outdir     $(FLY)/sculu-out
 
 run:
 	cargo run -- --logfile - \

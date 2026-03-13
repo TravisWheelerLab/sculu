@@ -24,4 +24,4 @@ tests/inputs/instances/inst-*
 
 *out*
 pfam*
-debug.log
+*.log

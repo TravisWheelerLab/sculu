@@ -8,6 +8,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+    process::{self, Command},
     time::Instant,
 };
 use which::which;
@@ -99,19 +100,14 @@ pub fn run_rmblastn(
             db.to_string_lossy().to_string(),
         ];
 
-        debug!("Running 'makeblastdb {}'", &makeblastdb_args.join(" "));
         let makeblastdb =
             which("makeblastdb").map_err(|e| anyhow!("makeblastdb: {e}"))?;
-        let res = std::process::Command::new(makeblastdb)
-            .args(makeblastdb_args)
-            .output()?;
-
-        if !res.status.success() {
-            bail!(String::from_utf8(res.stderr)?);
-        }
+        let mut cmd = Command::new(makeblastdb);
+        cmd.args(makeblastdb_args);
+        let _ = run_cmd(cmd)?;
 
         let rmblastn = which("rmblastn").map_err(|e| anyhow!("rmblastn: {e}"))?;
-        let mut cmd = std::process::Command::new(&rmblastn);
+        let mut cmd = Command::new(&rmblastn);
         let mut rmblastn_args = vec![
             "-db".to_string(),
             db_path.to_string_lossy().to_string(),
@@ -174,22 +170,8 @@ pub fn run_rmblastn(
             ]);
         }
 
-        debug!(
-            "Running '{} {}'",
-            rmblastn.display(),
-            rmblastn_args.join(" ")
-        );
-
-        let start = Instant::now();
-        let res = cmd.args(rmblastn_args).output()?;
-        if !res.status.success() {
-            bail!(String::from_utf8(res.stderr)?);
-        }
-
-        debug!(
-            "Rmblastn finished in {}",
-            format_seconds(start.elapsed().as_secs())
-        );
+        cmd.current_dir(out_dir).args(rmblastn_args);
+        let _ = run_cmd(cmd)?;
     }
 
     Ok(outfile)
@@ -219,20 +201,15 @@ pub fn run_blastp(
             "-in".to_string(),
             db.to_string_lossy().to_string(),
         ];
-
-        debug!("Running 'makeblastdb {}'", &makeblastdb_args.join(" "));
         let makeblastdb =
             which("makeblastdb").map_err(|e| anyhow!("makeblastdb: {e}"))?;
-        let res = std::process::Command::new(makeblastdb)
-            .args(makeblastdb_args)
-            .output()?;
 
-        if !res.status.success() {
-            bail!(String::from_utf8(res.stderr)?);
-        }
+        let mut cmd = Command::new(makeblastdb);
+        cmd.args(makeblastdb_args);
+        let _ = run_cmd(cmd)?;
 
         let blastp = which("blastp").map_err(|e| anyhow!("blastp: {e}"))?;
-        let mut cmd = std::process::Command::new(&blastp);
+        let mut cmd = Command::new(&blastp);
         let mut blastp_args = vec![
             "-db".to_string(),
             db_path.to_string_lossy().to_string(),
@@ -295,18 +272,8 @@ pub fn run_blastp(
             ]);
         }
 
-        debug!("Running '{} {}'", blastp.display(), blastp_args.join(" "));
-
-        let start = Instant::now();
-        let res = cmd.args(blastp_args).output()?;
-        if !res.status.success() {
-            bail!(String::from_utf8(res.stderr)?);
-        }
-
-        debug!(
-            "blastp finished in {}",
-            format_seconds(start.elapsed().as_secs())
-        );
+        cmd.args(blastp_args);
+        let _ = run_cmd(cmd)?;
     }
 
     Ok(outfile)
@@ -407,4 +374,21 @@ pub fn get_config(config_file: &Option<PathBuf>) -> Result<Config> {
         }
         _ => Ok(default_config()),
     }
+}
+
+// --------------------------------------------------
+pub fn run_cmd(mut cmd: Command) -> Result<process::Output> {
+    let start = Instant::now();
+    let res = cmd.output()?;
+
+    if !res.status.success() {
+        bail!(String::from_utf8(res.stderr)?);
+    }
+
+    debug!(
+        "Command {cmd:?} finished in {}",
+        format_seconds(start.elapsed().as_secs())
+    );
+
+    Ok(res)
 }

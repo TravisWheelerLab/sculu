@@ -7,15 +7,16 @@ pub mod types;
 use crate::{
     common::{copy_fasta, default_config, open, open_for_write, read_lines},
     types::{
-        ClusterArgs, ComponentsArgs, ConcatArgs, ConfigArgs, RmBlastOutput, RunArgs,
+        ClusterArgs, ClusterResult, ComponentsArgs, ConcatArgs, ConfigArgs,
+        RmBlastOutput, RunArgs,
     },
 };
 use anyhow::{bail, Result};
 use log::debug;
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
 use std::{
+    fs,
     io::{BufReader, BufWriter, Write},
-    path::PathBuf,
 };
 
 // --------------------------------------------------
@@ -25,7 +26,7 @@ pub fn run_sculu(args: &RunArgs, num_threads: usize) -> Result<()> {
         &ComponentsArgs {
             alphabet: args.alphabet.clone(),
             consensus: args.consensus.clone(),
-            instances: args.instances.clone(),
+            alignments: args.alignments.clone(),
             outdir: intermediate_dir.clone(),
             config: args.config.clone(),
         },
@@ -33,7 +34,7 @@ pub fn run_sculu(args: &RunArgs, num_threads: usize) -> Result<()> {
     )?;
     //dbg!(&built_components);
 
-    let mut merged: Vec<PathBuf> = vec![];
+    let mut clusters: Vec<ClusterResult> = vec![];
     for component in built_components.components {
         let res = cluster::cluster_component(
             &ClusterArgs {
@@ -48,13 +49,43 @@ pub fn run_sculu(args: &RunArgs, num_threads: usize) -> Result<()> {
             num_threads,
         )?;
 
-        merged.push(res);
+        clusters.push(res);
+    }
+    debug!("clusters =\n{clusters:#?}");
+
+    let final_seed_alignments_dir = args.outdir.join("seed_alignments");
+    fs::create_dir_all(&final_seed_alignments_dir)?;
+
+    if let Some(singletons) = &built_components.singletons {
+        let seed_alignments_dir = intermediate_dir.join("seed_alignments");
+        if !seed_alignments_dir.is_dir() {
+            bail!(r#"Missing "{}""#, seed_alignments_dir.display());
+        }
+
+        for singleton in read_lines(&singletons)? {
+            let filename = format!("{singleton}.stk");
+            let seed_alignments = seed_alignments_dir.join(&filename);
+            if seed_alignments.is_file() {
+                fs::copy(seed_alignments, final_seed_alignments_dir.join(&filename))?;
+            } else {
+                eprintln!(r#"Missing "{}""#, seed_alignments.display());
+            }
+        }
     }
 
+    // TODO: Need to renumber the "sculufam0-1" -> "sculufam1"
+    // and copy the MSA to the final seed alignments dir
+    // but this function was written to run from the CLI with
+    // just a list of component filename
+    // I could just look for the final ".stk" but I've gone to the trouble
+    // of returning the family_to_msa table.
     concat_files(&ConcatArgs {
         consensus_path: built_components.consensus_path,
-        singletons: built_components.singletons,
-        components: merged,
+        singletons: built_components.singletons.clone(),
+        components: clusters
+            .iter()
+            .map(|v| v.consensus_path.clone())
+            .collect::<Vec<_>>(),
         outfile: args.outdir.join("sculu_families.fa"),
     })?;
 

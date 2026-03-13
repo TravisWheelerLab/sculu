@@ -1,7 +1,7 @@
 use crate::{
     common::{
-        copy_fasta, get_config, open, open_for_write, read_instances_dir, run_blastp,
-        run_rmblastn,
+        copy_fasta, format_seconds, get_config, open, open_for_write,
+        read_instances_dir, run_blastp, run_rmblastn,
     },
     graph,
     types::{
@@ -16,10 +16,11 @@ use kseq::parse_reader;
 use log::debug;
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
 use rayon::prelude::*;
+use regex::Regex;
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
-    fs,
+    fs::{self, File},
     io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     slice,
@@ -34,12 +35,28 @@ pub fn build(args: &ComponentsArgs, num_threads: usize) -> Result<BuiltComponent
         fs::create_dir_all(&args.outdir)?;
     }
 
+    let seed_alignments_dir = args.outdir.join("seed_alignments");
+    fs::create_dir_all(&seed_alignments_dir)?;
+
+    let raw_instances_dir = args.outdir.join("raw_instances");
+    fs::create_dir_all(&raw_instances_dir)?;
+
+    let start = Instant::now();
+    let num_seqs =
+        msa_to_fasta(&args.alignments, &seed_alignments_dir, &raw_instances_dir)?;
+
+    debug!(
+        "Took {num_seqs} sequence{} from seeds alignments in {}",
+        if num_seqs == 1 { "" } else { "s" },
+        format_seconds(start.elapsed().as_secs()),
+    );
+
     let taken_instances_dir = args.outdir.join("instances");
     fs::create_dir_all(&taken_instances_dir)?;
 
     let checked = check_family_instances(CheckFamilyInstancesArgs {
         consensus_path: &args.consensus,
-        instances_dir: &args.instances,
+        instances_dir: &raw_instances_dir,
         out_dir: &args.outdir,
         taken_instances_dir: &taken_instances_dir,
         config: &config,
@@ -115,7 +132,7 @@ fn check_family_instances(
             }) {
                 Err(e) => eprintln!("Warning: {e}"),
                 Ok(num_taken) => {
-                    debug!("Took {num_taken} instances for {family_name}");
+                    debug!(r#"Took {num_taken} instances for family "{family_name}""#);
                 }
             }
             Ok(())
@@ -313,7 +330,7 @@ pub fn align_consensus_to_self(
         // Sort by size of component group ascending
         components.sort_by_key(|v| v.len());
 
-        debug!("components = {components:#?}");
+        debug!("Single-linked grouped components =\n{components:#?}");
 
         let (singles, multis) =
             components.split_at(components.partition_point(|v| v.len() == 1));
@@ -597,4 +614,87 @@ fn parse_alignment(blast_out: &PathBuf) -> Result<Vec<RmBlastOutput>> {
     }
 
     Ok(records)
+}
+
+// --------------------------------------------------
+// Currently just assuming STK format, will the be OK for protein?
+fn msa_to_fasta(
+    input_dir: &PathBuf,
+    seed_alignments_dir: &PathBuf,
+    fasta_dir: &PathBuf,
+) -> Result<usize> {
+    debug!(
+        r#"Writing seed alignments as FASTA into "{}""#,
+        fasta_dir.display()
+    );
+
+    let entries = fs::read_dir(input_dir)
+        .map_err(|e| anyhow!(r#"Failed to read dir "{}": {e}"#, input_dir.display()))?;
+    let comment = Regex::new(r"^#\s").unwrap();
+    let meta = Regex::new(r"^#=(\S{2})\s+(\S{2})\s+(.+)").unwrap();
+    let sequence = Regex::new(r"^(\S+)\s+(\S+)$").unwrap();
+    let delimiter = Regex::new(r"^[/]{2}$").unwrap();
+    let mut cur_rec: Vec<u8> = vec![];
+    let mut cur_id: Option<String> = None;
+    let mut out_file: Option<File> = None;
+    let mut num_taken = 0;
+
+    for entry in entries {
+        let entry = entry?;
+        let mut file = open(&entry.path())?;
+
+        loop {
+            let mut buf = vec![];
+            let bytes = file.read_until(b'\n', &mut buf)?;
+            if bytes == 0 {
+                break;
+            }
+
+            // Converts ISO-8859 to UTF-8
+            let line: String = buf.iter().map(|&c| c as char).collect();
+            let line = line.trim();
+            cur_rec.extend_from_slice(&buf);
+
+            if comment.is_match(&line) {
+                continue;
+            } else if delimiter.is_match(&line) {
+                // Reset output file when we reach the end of a record
+                out_file = None;
+                if !cur_rec.is_empty() {
+                    if let Some(id) = &cur_id {
+                        let alignment_file =
+                            seed_alignments_dir.join(format!("{id}.stk"));
+                        let mut fh = open_for_write(&alignment_file)?;
+                        fh.write_all(&cur_rec)?;
+                    }
+                    cur_rec.clear();
+                }
+                cur_id = None;
+            } else if let Some(cap) = meta.captures(&line) {
+                if &cap[1] == "GF" && &cap[2] == "ID" {
+                    let id = &cap[3].trim();
+                    num_taken += 1;
+                    let filename = fasta_dir.join(format!("{id}.fa"));
+                    out_file = Some(File::create(&filename)?);
+                    cur_id = Some(id.to_string());
+                }
+            } else if let Some(cap) = sequence.captures(&line) {
+                if let Some(ref mut fh) = out_file {
+                    let seq = cap[2].replace(".", "-");
+                    writeln!(fh, ">{}\n{}", &cap[1], seq.replace("-", ""))?;
+                }
+            }
+        }
+
+        // Just in case a bad STK file w/o a trailing "//" to end the record
+        if cur_id.is_some() && !cur_rec.is_empty() {
+            if let Some(id) = &cur_id {
+                let alignment_file = seed_alignments_dir.join(format!("{id}.stk"));
+                let mut fh = open_for_write(&alignment_file)?;
+                fh.write_all(&cur_rec)?;
+            }
+        }
+    }
+
+    Ok(num_taken)
 }
