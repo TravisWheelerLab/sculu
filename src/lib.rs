@@ -4,9 +4,9 @@ pub mod types;
 use crate::types::{
     AlignedConsensusPair, AlignmentScore, BlastpConfig, BuiltComponents,
     CheckFamilyInstancesArgs, CheckedFamilyResult, ClusterArgs, Components,
-    ComponentsArgs, Config, ConfigArgs, Direction, GeneralConfig, Independence,
-    MergeFamilies, Partition, RmBlastOutput, RmblastnConfig, SelectInstancesArgs,
-    SequenceAlphabet, StringPair, Winners,
+    ComponentsArgs, ConcatArgs, Config, ConfigArgs, Direction, GeneralConfig,
+    Independence, MergeFamilies, Partition, RmBlastOutput, RmblastnConfig, RunArgs,
+    SelectInstancesArgs, SequenceAlphabet, StringPair, Winners,
 };
 use anyhow::{anyhow, bail, Result};
 use bio::alphabets::dna::revcomp;
@@ -20,7 +20,7 @@ use noodles_fasta::{
     self,
     io::Reader as FastaReader,
     io::Writer as FastaWriter,
-    record::{Definition as FastaDefinition, Record as FastaRecord},
+    //record::{Definition as FastaDefinition, Record as FastaRecord},
 };
 use rayon::prelude::*;
 use regex::Regex;
@@ -109,9 +109,8 @@ pub fn build_components(
     let taken_instances_dir = args.outdir.join("instances");
     fs::create_dir_all(&taken_instances_dir)?;
 
-    //let (consensi_file, _family_to_instance)
     let checked = check_family_instances(CheckFamilyInstancesArgs {
-        consensi_path: &args.consensi,
+        consensus_path: &args.consensus,
         instances_dir: &args.instances,
         out_dir: &args.outdir,
         taken_instances_dir: &taken_instances_dir,
@@ -121,8 +120,8 @@ pub fn build_components(
     })?;
 
     // This will only BLAST if there are no components from a previous run
-    let components = align_consensi_to_self(
-        &checked.consensi_path,
+    let components = align_consensus_to_self(
+        &checked.consensus_path,
         &args.outdir,
         &args.alphabet,
         &config,
@@ -138,14 +137,13 @@ pub fn build_components(
         singletons: components.singletons,
         components: components.components,
         alignments: components.alignments,
-        consensi: checked.consensi_path,
+        consensus_path: checked.consensus_path,
         instances_dir: taken_instances_dir,
     })
 }
 
 // --------------------------------------------------
-pub fn process_component(args: &ClusterArgs, num_threads: usize) -> Result<PathBuf> {
-    //let component_file = &args.component;
+pub fn cluster_component(args: &ClusterArgs, num_threads: usize) -> Result<PathBuf> {
     let config = match args.config.as_ref() {
         Some(file) => get_config(file)?,
         _ => default_config(),
@@ -156,7 +154,7 @@ pub fn process_component(args: &ClusterArgs, num_threads: usize) -> Result<PathB
     }
 
     // If given an component file to process, assume the
-    // consensi and instances have been properly filtered
+    // consensus and instances have been properly filtered
     // and use given args as-is.
     let family_to_instance = read_instances_dir(&args.instances)?;
 
@@ -172,24 +170,20 @@ pub fn process_component(args: &ClusterArgs, num_threads: usize) -> Result<PathB
 }
 
 // --------------------------------------------------
-pub fn concat_files(
-    consensi: &PathBuf,
-    singletons: &Option<PathBuf>,
-    merged: &Vec<PathBuf>,
-    outfile: &PathBuf,
-) -> Result<()> {
-    let mut fasta_writer = FastaWriter::new(BufWriter::new(open_for_write(outfile)?));
+pub fn concat_files(args: &ConcatArgs) -> Result<()> {
+    let mut fasta_writer =
+        FastaWriter::new(BufWriter::new(open_for_write(&args.outfile)?));
 
-    if let Some(file) = singletons {
-        let singletons = read_lines(file)?;
+    if let Some(file) = &args.singletons {
+        let singletons = read_lines(&file)?;
         debug!(
             "Copying {} sequences from singletons file",
             singletons.len()
         );
-        copy_fasta(&singletons, consensi, &mut fasta_writer)?;
+        copy_fasta(&singletons, &args.consensus_path, &mut fasta_writer)?;
     }
 
-    for component_file in merged {
+    for component_file in &args.components {
         debug!(r#"Copying from "{}""#, component_file.display());
         let mut reader = FastaReader::new(BufReader::new(open(component_file)?));
         for record in reader.records().map_while(Result::ok) {
@@ -197,7 +191,7 @@ pub fn concat_files(
         }
     }
 
-    debug!(r#"Final output written to "{}""#, outfile.display());
+    debug!(r#"Final output written to "{}""#, args.outfile.display());
 
     Ok(())
 }
@@ -212,8 +206,19 @@ fn get_config(config_file: &PathBuf) -> Result<Config> {
     Ok(config)
 }
 
+//// --------------------------------------------------
+//fn get_sequence_ids(path: &PathBuf) -> Result<Vec<String>> {
+//    let mut reader = FastaReader::new(open(path)?);
+//    let mut ids = vec![];
+//    for result in reader.records() {
+//        let record = result?;
+//        ids.push(String::from_utf8(record.name().to_vec())?);
+//    }
+//    Ok(ids)
+//}
+
 // --------------------------------------------------
-// Align the consensi to itself to identify clusters, e.g.:
+// Align the consensus sequences to themselves to identify clusters, e.g.:
 // [
 //     [ "Charlie13a" ],
 //     [ "Tigger3c" ],
@@ -225,13 +230,15 @@ fn get_config(config_file: &PathBuf) -> Result<Config> {
 // The other 1..N will be written to files "component-N"
 // Returns the component file paths
 //
-pub fn align_consensi_to_self(
-    consensi: &Path,
+pub fn align_consensus_to_self(
+    consensus_path: &PathBuf,
     out_dir: &Path,
     alphabet: &SequenceAlphabet,
     config: &Config,
     num_threads: usize,
 ) -> Result<Components> {
+    debug!("Aligning consensus sequences to self");
+
     let components_dir = out_dir.join("components");
     fs::create_dir_all(&components_dir)?;
 
@@ -244,12 +251,22 @@ pub fn align_consensi_to_self(
     if num_components > 0 {
         debug!("Reusing existing component files");
     } else {
-        let blast_dir = out_dir.join("consensi_cluster");
+        let blast_dir = out_dir.join("consensus_cluster");
         let blast_out = match alphabet {
-            SequenceAlphabet::Dna => {
-                run_rmblastn(&blast_dir, consensi, consensi, config, num_threads)?
-            }
-            _ => run_blastp(&blast_dir, consensi, consensi, config, num_threads)?,
+            SequenceAlphabet::Dna => run_rmblastn(
+                &blast_dir,
+                consensus_path,
+                consensus_path,
+                config,
+                num_threads,
+            )?,
+            _ => run_blastp(
+                &blast_dir,
+                consensus_path,
+                consensus_path,
+                config,
+                num_threads,
+            )?,
         };
 
         // There may be multiple hits per pair, take highest
@@ -274,6 +291,7 @@ pub fn align_consensi_to_self(
                 anyhow!("Failed to read '{}': {e}", &best_alignments.display())
             })?;
 
+        //let mut saw_consensus: HashSet<String> = HashSet::new();
         let mut records = vec![];
         for res in reader.records() {
             let record: RmBlastOutput = res?.deserialize(None)?;
@@ -287,6 +305,8 @@ pub fn align_consensi_to_self(
             } else {
                 Direction::Reverse
             };
+            //let _ = saw_consensus.insert(record.target.to_string());
+            //let _ = saw_consensus.insert(record.query.to_string());
             alignment_wtr.serialize(AlignedConsensusPair {
                 target: record.target.to_string(),
                 query: record.query.clone(),
@@ -295,9 +315,21 @@ pub fn align_consensi_to_self(
             records.push(record);
         }
 
+        //debug!("saw_consensus = {saw_consensus:?}");
+        //let consensus_names = get_sequence_ids(consensus_path)?;
+        //debug!("consensus_names = {consensus_names:?}");
+        //let missing_consensus: Vec<_> = consensus_names
+        //    .into_iter()
+        //    .filter(|name| !saw_consensus.contains(name))
+        //    .collect();
+        //debug!("missing_consensus = {missing_consensus:?}");
+
         let mut components = graph::connected_components(records);
+
         // Sort by size of component group ascending
         components.sort_by_key(|v| v.len());
+
+        debug!("components = {components:#?}");
 
         let (singles, multis) =
             components.split_at(components.partition_point(|v| v.len() == 1));
@@ -378,39 +410,23 @@ fn take_best_alignments(
         for res in reader.records() {
             let record: RmBlastOutput = res?.deserialize(None)?;
 
-            if record.query == record.target {
-                continue;
-            }
-
-            // The coverage of the hits to either the query or subject must
-            // be at least half of the sequence length.
-            //let query_span = 1 + record.query_end.abs_diff(record.query_start);
-            //let subject_span = 1 + record.subject_end.abs_diff(record.subject_start);
-            //let query_coverage = query_span as f64 / record.query_len as f64;
-            //let subject_coverage = subject_span as f64 / record.subject_len as f64;
-            //let are_equiv_len = min(query_span, subject_span) as f64
-            //    >= (config.general.min_len_similarity
-            //        * max(query_span, subject_span) as f64);
-            //if query_coverage >= config.general.min_align_cover
-            //    && subject_coverage >= config.general.min_align_cover
-            //    && are_equiv_len
-            //{
-            debug!(
-                "target = {}, query = {}, pident = {}",
-                record.target, record.query, record.pident
-            );
+            // We need to include selfs because they may be the only
+            // hits present and will be placed into singletons later.
+            // if record.query != record.target {
+            //     continue;
+            // }
 
             if record.pident >= config.general.percent_id_for_components * 100.0 {
                 let pair = StringPair(record.query.clone(), record.target.clone());
-                debug!("ADDING {:?}", pair);
 
-                if let Some(val) = taken.get_mut(&pair) {
-                    if val.score > record.score {
-                        *val = record.clone();
-                    }
-                } else {
-                    taken.insert(pair, record.clone());
-                }
+                taken
+                    .entry(pair)
+                    .and_modify(|val| {
+                        if val.score > record.score {
+                            *val = record.clone();
+                        }
+                    })
+                    .or_insert(record);
             }
         }
 
@@ -453,6 +469,13 @@ fn merge_component(
 ) -> Result<PathBuf> {
     debug!("Merging component '{}'", args.component.display());
 
+    let filename_re = Regex::new(r"component-(\d+)").unwrap();
+    let component_number =
+        match filename_re.captures(&args.component.to_string_lossy().to_string()) {
+            Some(caps) => caps.get(1).unwrap().as_str().to_string(),
+            _ => bail!(r#"Component "{}" is not valid"#, args.component.display()),
+        };
+
     // The "component-N" file will contain the names of the families
     let families = read_lines(&args.component.to_path_buf())?;
 
@@ -466,13 +489,12 @@ fn merge_component(
     let mut flipped_pairs: HashSet<StringPair> = HashSet::new();
     for res in alignment_reader.records() {
         let record: AlignedConsensusPair = res?.deserialize(None)?;
+        let target = record.target.clone();
+        let query = record.query.clone();
         if record.is_flipped
-            && (families.contains(&record.target) || families.contains(&record.query))
+            && [&target, &query].iter().any(|name| families.contains(name))
         {
-            let pair = StringPair::new(record.target.clone(), record.query.clone());
-            if !flipped_pairs.contains(&pair) {
-                flipped_pairs.insert(pair);
-            }
+            let _ = flipped_pairs.insert(StringPair::new(target, query));
         }
     }
 
@@ -491,75 +513,82 @@ fn merge_component(
         families.len()
     );
 
-    let outfile = batch_dir.join("final.fa");
-    let mut final_writer = FastaWriter::new(BufWriter::new(open_for_write(&outfile)?));
     let start = Instant::now();
 
-    // Create a consensi file for this round containing only the given families
-    let mut batch_consensi = batch_dir.join("consensi.fa");
+    // Create a consensus file for this round containing only the given families
+    let mut batch_consensus = batch_dir.join("consensus.fa");
     {
         // Scoped to cause fasta_writer to close
         let mut fasta_writer =
-            FastaWriter::new(BufWriter::new(open_for_write(&batch_consensi)?));
+            FastaWriter::new(BufWriter::new(open_for_write(&batch_consensus)?));
         let num_taken =
-            copy_fasta(&families, &args.consensi.to_path_buf(), &mut fasta_writer)?;
+            copy_fasta(&families, &args.consensus.to_path_buf(), &mut fasta_writer)?;
 
         if num_taken == 0 {
             bail!(
-                "Failed to copy consensi sequences from '{}' to '{}'",
-                args.consensi.display(),
-                batch_consensi.display()
+                "Failed to copy consensus sequences from '{}' to '{}'",
+                args.consensus.display(),
+                batch_consensus.display()
+            );
+        } else {
+            debug!(
+                r#"Wrote {num_taken} batch consensus sequences to "{}""#,
+                batch_consensus.display()
             );
         }
     }
 
-    // Create query file for families
+    // Put the instances for the given families into a single file
     let all_seqs_path = &batch_dir.join("all_seqs.fa");
+    let num_instances = cat_sequences(&args.instances, &families, all_seqs_path)?;
+
     debug!(
-        "Concatenating all instance sequences into '{}'",
+        "Concatenated {num_instances} instance sequences into '{}'",
         all_seqs_path.display()
     );
-
-    // Put the instances for the given families into a single file
-    cat_sequences(&args.instances, &families, all_seqs_path)?;
 
     // Create a starting directory for the merge iterations.
     let round0_dir = batch_dir.join("round000");
     fs::create_dir_all(&round0_dir)?;
 
-    // As the consensi are merged, the family names are concatenated
+    // As the consensus sequences are merged, the family names are concatenated
     // into Newick-formatted strings to track the merges.
     // These can get quite long, causing `makeblastdb` to fail.
     // Make the sequence IDs simple integers by numbering
     // and move the family names to the description.
-    let consensi_path = round0_dir.join("consensi.fa");
-    debug!("Writing numbered consensi to '{}'", consensi_path.display());
-    let mut consensi_seqs = number_consensi(&batch_consensi, &consensi_path)?;
-    batch_consensi = consensi_path;
+    let consensus_path = round0_dir.join("consensus.fa");
+    debug!(
+        "Writing numbered consensus sequences to '{}'",
+        consensus_path.display()
+    );
+    let mut consensus_seqs = number_fasta(&batch_consensus, &consensus_path)?;
+    batch_consensus = consensus_path;
 
     // Start merging
     let trailing_semi = Regex::new(";$").unwrap();
     let mut prev_scores: Option<PathBuf> = None;
-    let mut prev_msa_result: Option<PathBuf> = None;
+    let mut next_family_number = 1;
+    let mut sculu_name_to_desc: HashMap<String, String> = HashMap::new();
+    //let mut prev_msa_result: Option<PathBuf> = None;
     for round in 1.. {
         debug!(">>> Round {round} <<<");
         let round_dir = batch_dir.join(format!("round{round:03}"));
         fs::create_dir_all(&round_dir)?;
 
-        // Align all the sequences to the current consensi.
-        // On the first round, all the original consensi will be included.
-        // On future rounds, only the newly merged consensi will be present.
+        // Align all the sequences to the current consensus sequences.
+        // On the first round, all the original consensus will be included.
+        // On future rounds, only the newly merged consensus will be present.
         let alignment_file = match args.alphabet {
             SequenceAlphabet::Dna => run_rmblastn(
                 &round_dir,
-                &batch_consensi,
+                &batch_consensus,
                 all_seqs_path,
                 config,
                 num_threads,
             )?,
             _ => run_blastp(
                 &round_dir,
-                &batch_consensi,
+                &batch_consensus,
                 all_seqs_path,
                 config,
                 num_threads,
@@ -570,8 +599,12 @@ fn merge_component(
         // On the first round, there will be no "prev_scores" file.
         // On the following rounds, the previous round's scores will be
         // included for those families that were not merged.
-        let scores_file =
-            extract_scores(&alignment_file, &prev_scores, &batch_consensi, &round_dir)?;
+        let scores_file = extract_scores(
+            &alignment_file,
+            &prev_scores,
+            &batch_consensus,
+            &round_dir,
+        )?;
 
         // Save this round's alignment scores for the next
         prev_scores = Some(scores_file.clone());
@@ -611,9 +644,9 @@ fn merge_component(
         }
 
         // Merge the least independent families.
-        // The new consensi file will only contain the merged families.
-        let new_consensi_path = &round_dir.join("new-consensi.fa");
-        let mut new_consensi = open_for_write(new_consensi_path)?;
+        // The new consensus file will only contain the merged families.
+        let new_consensus_path = &round_dir.join("new-consensus.fa");
+        let mut new_consensus = open_for_write(new_consensus_path)?;
         let mut merge_num = 0;
         let mut already_merged: HashSet<String> = HashSet::new();
         for pair in non_independent {
@@ -667,27 +700,31 @@ fn merge_component(
                 &mut family_to_instance,
             )?;
 
+            let f1_desc = sculu_name_to_desc.get(&pair.f1).unwrap_or(&pair.f1);
+            let f2_desc = sculu_name_to_desc.get(&pair.f2).unwrap_or(&pair.f2);
             let new_family_newick = format!(
                 "({},{}):{:0.02};",
-                trailing_semi.replace(&pair.f1, ""),
-                trailing_semi.replace(&pair.f2, ""),
+                //trailing_semi.replace(&pair.f1, ""),
+                //trailing_semi.replace(&pair.f2, ""),
+                trailing_semi.replace(&f1_desc, ""),
+                trailing_semi.replace(&f2_desc, ""),
                 pair.val
             );
 
-            let f1_len = consensi_seqs.get(&pair.f1).map_or(0, |v| v.len());
-            let f2_len = consensi_seqs.get(&pair.f2).map_or(0, |v| v.len());
+            let f1_len = consensus_seqs.get(&pair.f1).map_or(0, |v| v.len());
+            let f2_len = consensus_seqs.get(&pair.f2).map_or(0, |v| v.len());
             let new_len = new_consensus_seq.len();
 
             debug!(
                 "{} len was {f1_len}, {} len was {f2_len}, \
-                    new consensi len is {new_len}",
+                    new consensus len is {new_len}",
                 pair.f1, pair.f2
             );
 
-            // Update the consensi mapping
-            consensi_seqs.remove(&pair.f1);
-            consensi_seqs.remove(&pair.f2);
-            consensi_seqs.insert(new_family_newick, new_consensus_seq.clone());
+            // Update the consensus mapping
+            consensus_seqs.remove(&pair.f1);
+            consensus_seqs.remove(&pair.f2);
+            consensus_seqs.insert(new_family_newick, new_consensus_seq.clone());
 
             // Keep track of all the families that have been merged
             for family in all_families {
@@ -695,30 +732,38 @@ fn merge_component(
             }
         }
 
-        // Write the merged families to the new consensi file
+        // Write the merged families to the new consensus file
         debug!(
-            "Writing {} consensi to '{}'",
-            &consensi_seqs.len(),
-            new_consensi_path.display()
+            "Writing {} consensus sequences to '{}'",
+            &consensus_seqs.len(),
+            new_consensus_path.display()
         );
 
-        for (family_number, (family_name, seq)) in consensi_seqs.iter().enumerate() {
-            writeln!(new_consensi, ">{family_number} {family_name}\n{seq}",)?;
+        //for (family_number, (family_name, seq)) in consensus_seqs.iter().enumerate() {
+        for (family_name, seq) in consensus_seqs.iter() {
+            let sculu_name = format!("sculufam{component_number}-{next_family_number}");
+            let _ = sculu_name_to_desc
+                .insert(sculu_name.to_string(), family_name.to_string());
+            writeln!(new_consensus, ">{sculu_name} {family_name}\n{seq}",)?;
+            next_family_number += 1;
         }
 
-        batch_consensi = new_consensi_path.to_path_buf();
+        batch_consensus = new_consensus_path.to_path_buf();
     }
 
-    let mut reader = FastaReader::new(open(&batch_consensi)?);
+    let outfile = batch_dir.join("final.fa");
+    let mut final_writer = FastaWriter::new(BufWriter::new(open_for_write(&outfile)?));
+    let mut reader = FastaReader::new(open(&batch_consensus)?);
     let mut new_seqs = 0;
     for result in reader.records() {
-        let mut record = result?;
-        if let Some(desc) = record.description() {
-            record = FastaRecord::new(
-                FastaDefinition::new(desc, None),
-                record.sequence().clone(),
-            )
-        }
+        //let mut record = result?;
+        //if let Some(desc) = record.description() {
+        //    record = FastaRecord::new(
+        //        FastaDefinition::new(desc, None),
+        //        record.sequence().clone(),
+        //    )
+        //}
+        let record = result?;
         final_writer.write_record(&record)?;
         new_seqs += 1;
     }
@@ -1055,11 +1100,15 @@ fn call_winners(
                 pos.iter().filter(|&&j| j != i).map(|&j| conf[j]).collect();
             let pairs: Vec<_> =
                 std::iter::repeat_n(val, others.len()).zip(others).collect();
-            let comps: Vec<_> = pairs
+            //let comps: Vec<_> = pairs
+            //    .iter()
+            //    .map(|(x, y)| (x * (1. / confidence_margin as f64)) > *y)
+            //    .collect();
+            //all_comps.push(comps.iter().all(|&v| v));
+            let all_ok = pairs
                 .iter()
-                .map(|(x, y)| (x * (1. / confidence_margin as f64)) > *y)
-                .collect();
-            all_comps.push(comps.iter().all(|&v| v));
+                .all(|(x, y)| (x * (1. / confidence_margin as f64)) > *y);
+            all_comps.push(all_ok);
         }
 
         let winners: Vec<String> = families
@@ -1113,10 +1162,11 @@ fn cat_sequences(
     instances_dir: &PathBuf,
     families: &[String],
     outpath: &PathBuf,
-) -> Result<()> {
+) -> Result<usize> {
     let mut output = open_for_write(outpath)?;
     let entries = fs::read_dir(instances_dir)
         .map_err(|e| anyhow!(r#"Failed to read "{}": {e}"#, instances_dir.display()))?;
+    let mut count = 0;
 
     for entry in entries {
         let file = entry?;
@@ -1141,22 +1191,23 @@ fn cat_sequences(
                 rec.des(),
                 rec.seq()
             )?;
+            count += 1;
         }
     }
 
-    Ok(())
+    Ok(count)
 }
 
 // --------------------------------------------------
 // This function will first filter the instances for those that
 // are most representative of the family, and then it will filter
-// the consensi for those that have sufficient supporting instances.
+// the consensus for those that have sufficient supporting instances.
 fn check_family_instances(
     args: CheckFamilyInstancesArgs,
 ) -> Result<CheckedFamilyResult> {
     debug!(
-        r#"Checking consensi file "{}""#,
-        args.consensi_path.display()
+        r#"Checking consensus file "{}""#,
+        args.consensus_path.display()
     );
 
     let instances = read_instances_dir(&args.instances_dir)?;
@@ -1181,7 +1232,7 @@ fn check_family_instances(
             let taken_path = args.taken_instances_dir.join(format!("{family_name}.fa"));
 
             match select_instances(SelectInstancesArgs {
-                consensi_path: args.consensi_path,
+                consensus_path: args.consensus_path,
                 family_name: &family_name,
                 from_path: &instance_path,
                 to_path: &taken_path,
@@ -1213,7 +1264,7 @@ fn check_family_instances(
             );
             let num_taken = copy_fasta(
                 &[family_name.clone()],
-                args.consensi_path,
+                args.consensus_path,
                 &mut too_few_writer,
             )?;
             if num_taken != 1 {
@@ -1228,30 +1279,36 @@ fn check_family_instances(
 
     let family_to_instance = read_instances_dir(args.taken_instances_dir)?;
     debug!(
-        "family_to_instance has {} members",
-        family_to_instance.len()
+        "Finished instance selection for {} consensus in {:?}",
+        family_to_instance.len(),
+        now.elapsed()
     );
-    debug!("Finished instance selection in {:?}", now.elapsed());
 
-    // Create a new consensi file containing only the families that have instances
-    let taken_consensi_path = args.out_dir.join("consensi.fa");
-    let mut out_consensi = open_for_write(&taken_consensi_path)?;
-    let mut reader = parse_reader(open(args.consensi_path)?)?;
-    let mut consensi_names: HashMap<String, u32> = HashMap::new();
+    // Create a new consensus file containing only the families that have instances
+    let taken_consensus_path = args.out_dir.join("consensus.fa");
+    let mut out_consensus = open_for_write(&taken_consensus_path)?;
+    debug!(
+        r#"Creating new consensus file "{}""#,
+        taken_consensus_path.display()
+    );
+
+    let mut reader = parse_reader(open(args.consensus_path)?)?;
+    let mut consensus_names: HashMap<String, u32> = HashMap::new();
     while let Some(rec) = reader.iter_record()? {
         let family = rec.head().to_string();
         if family_to_instance.contains_key(&family) {
-            consensi_names
+            debug!(r#"... adding "{family}""#);
+            consensus_names
                 .entry(rec.head().to_string())
                 .and_modify(|v| *v += 1)
                 .or_insert(1);
-            writeln!(out_consensi, ">{family}\n{}", rec.seq())?;
+            writeln!(out_consensus, ">{family}\n{}", rec.seq())?;
         } else {
-            debug!("Family '{family}' has no instances, removing!");
+            debug!(r#"... skipping "{family}""#);
         }
     }
 
-    let mut dups: Vec<_> = consensi_names
+    let mut dups: Vec<_> = consensus_names
         .iter()
         .flat_map(|(name, &count)| (count > 1).then_some(name))
         .collect();
@@ -1260,13 +1317,13 @@ fn check_family_instances(
         // Have to sort for tests
         dups.sort();
         bail!(
-            "The following consensi IDs are duplicated: {}",
+            "The following consensus IDs are duplicated: {}",
             dups.iter().join(", ")
         );
     }
 
     Ok(CheckedFamilyResult {
-        consensi_path: taken_consensi_path,
+        consensus_path: taken_consensus_path,
         family_to_instance,
     })
 }
@@ -1295,17 +1352,8 @@ fn select_instances(args: SelectInstancesArgs) -> Result<usize> {
     if args.to_path.is_file() {
         let mut reader = FastaReader::new(open(args.to_path)?);
         let num = reader.records().count();
-        //if num < args.min_num_instances {
-        //    debug!(
-        //        "Removing previous instance file {}, too few ({num})",
-        //        args.to_path.display()
-        //    );
-        //    fs::remove_file(args.to_path)?;
-        //    return Ok(0);
-        //} else {
         debug!("Reusing existing instance file: {}", args.to_path.display());
         return Ok(num);
-        //}
     }
 
     let blast_dir = args.working_dir.join(args.family_name);
@@ -1317,16 +1365,16 @@ fn select_instances(args: SelectInstancesArgs) -> Result<usize> {
         let mut writer = FastaWriter::new(BufWriter::new(open_for_write(&db_path)?));
         let num_taken = copy_fasta(
             &[args.family_name.to_string()],
-            args.consensi_path,
+            args.consensus_path,
             &mut writer,
         )?;
 
         if num_taken != 1 {
             fs::remove_file(db_path)?;
             bail!(
-                r#"Failed to find family "{}" in consensi "{}""#,
+                r#"Failed to find family "{}" in consensus "{}""#,
                 args.family_name,
-                args.consensi_path.display()
+                args.consensus_path.display()
             );
         }
     }
@@ -1504,7 +1552,7 @@ fn downsample(
 fn extract_scores(
     alignment_file: &PathBuf,
     prev_scores_file: &Option<PathBuf>,
-    consensi: &PathBuf,
+    consensus_path: &PathBuf,
     outdir: &Path,
 ) -> Result<PathBuf> {
     debug!(
@@ -1513,12 +1561,13 @@ fn extract_scores(
         prev_scores_file
     );
 
-    let mut reader = parse_reader(open(consensi)?)?;
-    let mut consensi_names: HashMap<String, String> = HashMap::new();
+    let mut reader = parse_reader(open(consensus_path)?)?;
+    let mut consensus_names: HashMap<String, String> = HashMap::new();
     while let Some(rec) = reader.iter_record()? {
-        consensi_names
+        consensus_names
             .insert(rec.head().trim().to_string(), rec.des().trim().to_string());
     }
+    debug!("consensus_names = {consensus_names:#?}");
 
     let scores_file = outdir.join("alignment-scores.tsv");
     let mut scores_wtr = WriterBuilder::new()
@@ -1543,7 +1592,7 @@ fn extract_scores(
     for res in records {
         let res = res?;
         let rec: RmBlastOutput = res.deserialize(None)?;
-        match consensi_names.get(&rec.query) {
+        match consensus_names.get(&rec.query) {
             Some(query_name) => {
                 // Note the families involved in the previous round's
                 // merges in order to skip them when adding the
@@ -1877,12 +1926,12 @@ fn msa_dna(input_file: &Path, num_threads: usize) -> Result<PathBuf> {
 }
 
 // --------------------------------------------------
-fn number_consensi(
-    consensi: &PathBuf,
-    outpath: &PathBuf,
+fn number_fasta(
+    in_path: &PathBuf,
+    out_path: &PathBuf,
 ) -> Result<HashMap<String, String>> {
-    let mut outfile = open_for_write(outpath)?;
-    let mut reader = parse_reader(open(consensi)?)?;
+    let mut outfile = open_for_write(out_path)?;
+    let mut reader = parse_reader(open(in_path)?)?;
     let mut seqs: HashMap<String, String> = HashMap::new();
     let mut i = 0;
 
@@ -1943,14 +1992,58 @@ fn parse_newick(val: &str) -> Vec<String> {
 }
 
 // --------------------------------------------------
+pub fn run_sculu(args: &RunArgs, num_threads: usize) -> Result<()> {
+    let intermediate_dir = args.outdir.join("intermediate");
+    let built_components = build_components(
+        &ComponentsArgs {
+            alphabet: args.alphabet.clone(),
+            consensus: args.consensus.clone(),
+            instances: args.instances.clone(),
+            outdir: intermediate_dir.clone(),
+            config: args.config.clone(),
+        },
+        num_threads,
+    )?;
+    //dbg!(&built_components);
+
+    let mut merged: Vec<PathBuf> = vec![];
+    for component in built_components.components {
+        let res = cluster_component(
+            &ClusterArgs {
+                alphabet: args.alphabet.clone(),
+                consensus: built_components.consensus_path.clone(),
+                alignments: built_components.alignments.clone(),
+                instances: built_components.instances_dir.clone(),
+                outdir: intermediate_dir.clone(),
+                config: args.config.clone(),
+                component,
+            },
+            num_threads,
+        )?;
+
+        merged.push(res);
+    }
+    dbg!(&merged);
+
+    concat_files(&ConcatArgs {
+        consensus_path: built_components.consensus_path,
+        singletons: built_components.singletons,
+        components: merged,
+        outfile: args.outdir.join("sculu_families.fa"),
+    })?;
+
+    Ok(())
+}
+
+// --------------------------------------------------
 #[cfg(test)]
 mod tests {
     use crate::{parse_alignment, RmBlastOutput};
 
     use super::{
         bitscore_to_confidence, call_winners, cat_sequences, downsample,
-        extract_scores, find_independence, format_seconds, independence,
-        number_consensi, open, parse_newick, Independence, StringPair, Winners,
+        extract_scores, find_independence, format_seconds, independence, number_fasta,
+        open, parse_newick, Independence, StringPair, Winners,
     };
     use anyhow::Result;
     use kseq::parse_reader;
@@ -2319,10 +2412,10 @@ mod tests {
     }
 
     #[test]
-    fn test_number_consensi() -> Result<()> {
-        let orig_consensi = PathBuf::from("tests/inputs/consensi.fa");
+    fn test_number_fasta() -> Result<()> {
+        let orig = PathBuf::from("tests/inputs/consensi.fa");
         let outpath = NamedTempFile::new()?;
-        let res = number_consensi(&orig_consensi, &outpath.path().into());
+        let res = number_fasta(&orig, &outpath.path().into());
         assert!(res.is_ok());
 
         let actual = fs::read_to_string(outpath)?;
