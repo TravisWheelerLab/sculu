@@ -1,10 +1,14 @@
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
-use sculu::types::{Cli, Command};
+use sculu::{
+    common::format_seconds,
+    types::{Cli, Command},
+};
 use std::{
     fs::{self, File},
     io::BufWriter,
     path::PathBuf,
+    time::Instant,
 };
 
 // --------------------------------------------------
@@ -40,14 +44,15 @@ fn run(args: Cli) -> Result<()> {
     match &args.command.expect("Missing command") {
         Command::Config(args) => {
             sculu::write_config(args)?;
+            println!(r#"Wrote "{}""#, args.outfile.display());
             Ok(())
         }
         Command::Components(args) => {
-            sculu::build_components(args, num_threads)?;
+            sculu::build_components::build(args, num_threads)?;
             Ok(())
         }
         Command::Cluster(args) => {
-            sculu::cluster_component(args, num_threads)?;
+            sculu::cluster::cluster_component(args, num_threads)?;
             Ok(())
         }
         Command::Concat(args) => {
@@ -56,7 +61,13 @@ fn run(args: Cli) -> Result<()> {
         }
         Command::Run(args) => {
             // Do all the things!
+            let start = Instant::now();
             sculu::run_sculu(args, num_threads)?;
+            println!(
+                "Wrote output to {} in {}",
+                args.outdir.display(),
+                format_seconds(start.elapsed().as_secs()),
+            );
             Ok(())
         }
     }

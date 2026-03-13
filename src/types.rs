@@ -87,29 +87,23 @@ pub struct ConcatArgs {
 #[derive(Debug, Parser, Clone)]
 #[command()]
 pub struct RunArgs {
-    /// Sequence alphabet
-    #[arg(short, long, value_name = "ALPHABET", required = true)]
-    pub alphabet: SequenceAlphabet,
-
     /// FASTA file of subfamily consensus
     #[arg(long, value_name = "CONSENSUS", required = true)]
     pub consensus: PathBuf,
 
-    /// Directory of instance files for each subfamily
-    #[arg(long, value_name = "INSTANCES", required = true)]
+    /// Directory of seed alignments for each subfamily
+    #[arg(long, value_name = "ALIGNMENTS", required = true)]
+    //pub seed_alignments: PathBuf,
     pub instances: PathBuf,
 
-    /// One file from the "components" action
-    #[arg(long, value_name = "COMPONENT")]
-    pub component: Option<PathBuf>,
+    /// Sequence alphabet
+    #[arg(short, long, value_name = "ALPHABET", required = true)]
+    pub alphabet: SequenceAlphabet,
 
     /// Output directory
-    #[arg(long, value_name = "OUTDIR")]
+    #[arg(long, value_name = "OUTDIR", default_value = "sculu-out")]
     pub outdir: PathBuf,
 
-    // Output file
-    //#[arg(long, value_name = "OUTFILE", default_value = "families.fa")]
-    //pub outfile: PathBuf,
     /// Config file
     #[arg(long, value_name = "CONFIG")]
     pub config: Option<PathBuf>,
@@ -126,8 +120,9 @@ pub struct ComponentsArgs {
     #[arg(long, value_name = "CONSENSUS", required = true)]
     pub consensus: PathBuf,
 
-    /// Directory of instance files for each subfamily
-    #[arg(long, value_name = "INSTANCES", required = true)]
+    /// Directory of seed alignments for each subfamily
+    #[arg(long, value_name = "ALIGNMENTS", required = true)]
+    //pub seed_alignments: PathBuf,
     pub instances: PathBuf,
 
     /// Output directory

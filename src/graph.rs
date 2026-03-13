@@ -6,7 +6,7 @@ use petgraph::{
         EdgeRef, IntoEdgeReferences, IntoNodeReferences, NodeCompactIndexable, NodeRef,
     },
 };
-use std:: collections::HashMap;
+use std::collections::HashMap;
 
 // --------------------------------------------------
 /// Given a slice of `RmBlastOutput` records, get the connected components
