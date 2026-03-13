@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
-use sculu::types::{Cli, ClusterArgs, Command, ComponentsArgs};
+use sculu::types::{Cli, Command};
 use std::{
     fs::{self, File},
     io::BufWriter,
@@ -47,59 +47,16 @@ fn run(args: Cli) -> Result<()> {
             Ok(())
         }
         Command::Cluster(args) => {
-            sculu::process_component(args, num_threads)?;
+            sculu::cluster_component(args, num_threads)?;
             Ok(())
         }
         Command::Concat(args) => {
-            sculu::concat_files(
-                &args.consensi,
-                &args.singletons,
-                &args.components,
-                &args.outfile,
-            )?;
+            sculu::concat_files(args)?;
             Ok(())
         }
         Command::Run(args) => {
-            let intermediate_dir = args.outdir.join("intermediate");
-            let built_components = sculu::build_components(
-                &ComponentsArgs {
-                    alphabet: args.alphabet.clone(),
-                    consensi: args.consensi.clone(),
-                    instances: args.instances.clone(),
-                    outdir: intermediate_dir.clone(),
-                    config: args.config.clone(),
-                },
-                num_threads,
-            )?;
-            dbg!(&built_components);
-
-            let mut merged: Vec<PathBuf> = vec![];
-            for component in built_components.components {
-                let res = sculu::process_component(
-                    &ClusterArgs {
-                        alphabet: args.alphabet.clone(),
-                        consensi: built_components.consensi.clone(),
-                        alignments: built_components.alignments.clone(),
-                        instances: built_components.instances_dir.clone(),
-                        outdir: intermediate_dir.clone(),
-                        config: args.config.clone(),
-                        component,
-                    },
-                    num_threads,
-                )?;
-
-                merged.push(res);
-            }
-            dbg!(&merged);
-
-            let outfile = args.outdir.join("sculu_families.fa");
-            sculu::concat_files(
-                &built_components.consensi,
-                &built_components.singletons,
-                &merged,
-                &outfile,
-            )?;
-
+            // Do all the things!
+            sculu::run_sculu(args, num_threads)?;
             Ok(())
         }
     }
