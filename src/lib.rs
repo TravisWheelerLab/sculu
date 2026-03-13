@@ -78,7 +78,7 @@ pub fn concat_files(args: &ConcatArgs) -> Result<()> {
         FastaWriter::new(BufWriter::new(open_for_write(&args.outfile)?));
 
     if let Some(file) = &args.singletons {
-        let singletons = read_lines(&file)?;
+        let singletons = read_lines(file)?;
         debug!(
             "Copying {} sequences from singletons file",
             singletons.len()

@@ -22,6 +22,7 @@ use std::{
     fs,
     io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+    slice,
     time::Instant,
 };
 
@@ -81,7 +82,7 @@ fn check_family_instances(
         args.consensus_path.display()
     );
 
-    let instances = read_instances_dir(&args.instances_dir)?;
+    let instances = read_instances_dir(args.instances_dir)?;
 
     debug!(
         "Found {} instance files in '{}'",
@@ -104,12 +105,12 @@ fn check_family_instances(
 
             match select_instances(SelectInstancesArgs {
                 consensus_path: args.consensus_path,
-                family_name: &family_name,
-                from_path: &instance_path,
+                family_name,
+                from_path: instance_path,
                 to_path: &taken_path,
                 working_dir: &working_dir,
-                alphabet: &args.alphabet,
-                config: &args.config,
+                alphabet: args.alphabet,
+                config: args.config,
                 num_threads: args.num_threads,
             }) {
                 Err(e) => eprintln!("Warning: {e}"),
@@ -125,7 +126,7 @@ fn check_family_instances(
     let too_few_path = args.out_dir.join("too_few.fa");
     let mut too_few_writer =
         FastaWriter::new(BufWriter::new(open_for_write(&too_few_path)?));
-    let taken_instances = read_instances_dir(&args.taken_instances_dir)?;
+    let taken_instances = read_instances_dir(args.taken_instances_dir)?;
     for (family_name, instance_path) in taken_instances {
         let mut reader = FastaReader::new(open(&instance_path)?);
         let num_taken = reader.records().count();
@@ -134,7 +135,7 @@ fn check_family_instances(
                 r#"Removing family "{family_name}", too few instances ({num_taken})"#,
             );
             let num_taken = copy_fasta(
-                &[family_name.clone()],
+                slice::from_ref(&family_name),
                 args.consensus_path,
                 &mut too_few_writer,
             )?;
@@ -214,7 +215,7 @@ fn check_family_instances(
 // Returns the component file paths
 //
 pub fn align_consensus_to_self(
-    consensus_path: &PathBuf,
+    consensus_path: &Path,
     out_dir: &Path,
     alphabet: &SequenceAlphabet,
     config: &Config,

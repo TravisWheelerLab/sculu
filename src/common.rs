@@ -399,7 +399,7 @@ pub fn default_config() -> Config {
 pub fn get_config(config_file: &Option<PathBuf>) -> Result<Config> {
     match config_file {
         Some(filename) => {
-            let mut file = open(&filename)?;
+            let mut file = open(filename)?;
             let mut contents = String::new();
             let _bytes = file.read_to_string(&mut contents);
             let config: Config = toml::from_str(&contents)?;

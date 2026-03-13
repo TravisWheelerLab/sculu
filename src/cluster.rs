@@ -61,7 +61,7 @@ fn merge_component(
 
     let filename_re = Regex::new(r"component-(\d+)").unwrap();
     let component_number =
-        match filename_re.captures(&args.component.to_string_lossy().to_string()) {
+        match filename_re.captures(args.component.to_string_lossy().as_ref()) {
             Some(caps) => caps.get(1).unwrap().as_str().to_string(),
             _ => bail!(r#"Component "{}" is not valid"#, args.component.display()),
         };
@@ -296,8 +296,8 @@ fn merge_component(
                 "({},{}):{:0.02};",
                 //trailing_semi.replace(&pair.f1, ""),
                 //trailing_semi.replace(&pair.f2, ""),
-                trailing_semi.replace(&f1_desc, ""),
-                trailing_semi.replace(&f2_desc, ""),
+                trailing_semi.replace(f1_desc, ""),
+                trailing_semi.replace(f2_desc, ""),
                 pair.val
             );
 
