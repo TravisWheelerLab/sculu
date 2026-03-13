@@ -26,16 +26,16 @@ pub enum Command {
     /// Generate config TOML
     Config(ConfigArgs),
 
-    /// Align consensi to self and create "components"
+    /// Align consensus sequences to self and create "components"
     Components(ComponentsArgs),
 
     /// Cluster output from "components"
     Cluster(ClusterArgs),
 
-    /// Concatenate singletons from "components" and output from "cluster"
+    /// Concatenate the singletons and clusters from "components"
     Concat(ConcatArgs),
 
-    /// Run all steps (components, cluster, concat)
+    /// Run all steps (build components, cluster, concat)
     Run(RunArgs),
 }
 
@@ -71,9 +71,9 @@ pub struct ConcatArgs {
     #[arg(short, long, value_name = "OUTFILE", required = true)]
     pub outfile: PathBuf,
 
-    /// The filtered FASTA consensi from "components"
-    #[arg(long, value_name = "CONSENSI", required = true)]
-    pub consensi: PathBuf,
+    /// The filtered FASTA consensus from "components"
+    #[arg(long, value_name = "CONSENSUS", required = true)]
+    pub consensus_path: PathBuf,
 
     /// Singletons file from "components"
     #[arg(long, value_name = "SINGLETONS")]
@@ -91,9 +91,9 @@ pub struct RunArgs {
     #[arg(short, long, value_name = "ALPHABET", required = true)]
     pub alphabet: SequenceAlphabet,
 
-    /// FASTA file of subfamily consensi
-    #[arg(long, value_name = "CONSENSI", required = true)]
-    pub consensi: PathBuf,
+    /// FASTA file of subfamily consensus
+    #[arg(long, value_name = "CONSENSUS", required = true)]
+    pub consensus: PathBuf,
 
     /// Directory of instance files for each subfamily
     #[arg(long, value_name = "INSTANCES", required = true)]
@@ -122,9 +122,9 @@ pub struct ComponentsArgs {
     #[arg(short, long, value_name = "ALPHABET", required = true)]
     pub alphabet: SequenceAlphabet,
 
-    /// FASTA file of subfamily consensi
-    #[arg(long, value_name = "CONSENSI", required = true)]
-    pub consensi: PathBuf,
+    /// FASTA file of subfamily consensus sequences
+    #[arg(long, value_name = "CONSENSUS", required = true)]
+    pub consensus: PathBuf,
 
     /// Directory of instance files for each subfamily
     #[arg(long, value_name = "INSTANCES", required = true)]
@@ -150,9 +150,9 @@ pub struct ClusterArgs {
     #[arg(long, value_name = "ALIGNMENTS", required = true)]
     pub alignments: PathBuf,
 
-    /// The filtered FASTA consensi from "components"
-    #[arg(long, value_name = "CONSENSI", required = true)]
-    pub consensi: PathBuf,
+    /// The filtered FASTA consensus sequences from "components"
+    #[arg(long, value_name = "CONSENSUS", required = true)]
+    pub consensus: PathBuf,
 
     /// Directory of filtered instance files from "components"
     #[arg(long, value_name = "INSTANCES", required = true)]
@@ -290,7 +290,7 @@ pub struct BuiltComponents {
     pub singletons: Option<PathBuf>,
     pub alignments: PathBuf,
     pub components: Vec<PathBuf>,
-    pub consensi: PathBuf,
+    pub consensus_path: PathBuf,
     pub instances_dir: PathBuf,
 }
 
@@ -333,7 +333,7 @@ pub struct MergeFamilies<'a> {
 
 #[derive(Debug)]
 pub struct CheckFamilyInstancesArgs<'a> {
-    pub consensi_path: &'a PathBuf,
+    pub consensus_path: &'a PathBuf,
     pub instances_dir: &'a PathBuf,
     pub out_dir: &'a PathBuf,
     pub taken_instances_dir: &'a PathBuf,
@@ -344,13 +344,13 @@ pub struct CheckFamilyInstancesArgs<'a> {
 
 #[derive(Debug)]
 pub struct CheckedFamilyResult {
-    pub consensi_path: PathBuf,
+    pub consensus_path: PathBuf,
     pub family_to_instance: HashMap<String, PathBuf>,
 }
 
 #[derive(Debug)]
 pub struct SelectInstancesArgs<'a> {
-    pub consensi_path: &'a PathBuf,
+    pub consensus_path: &'a PathBuf,
     pub family_name: &'a String,
     pub from_path: &'a PathBuf,
     pub to_path: &'a PathBuf,
