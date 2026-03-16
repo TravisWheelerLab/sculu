@@ -79,7 +79,7 @@ where
 // --------------------------------------------------
 #[cfg(test)]
 mod graph_tests {
-    use crate::{graph::connected_components, parse_alignment};
+    use crate::{build_components::parse_alignment, graph::connected_components};
     use anyhow::Result;
     use std::path::PathBuf;
 

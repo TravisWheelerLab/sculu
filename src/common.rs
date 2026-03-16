@@ -392,3 +392,32 @@ pub fn run_cmd(mut cmd: Command) -> Result<process::Output> {
 
     Ok(res)
 }
+
+// --------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::format_seconds;
+    use anyhow::Result;
+
+    #[test]
+    fn test_format_seconds() -> Result<()> {
+        let one_hour = 60 * 60;
+        let one_day = one_hour * 24;
+        assert_eq!(format_seconds(0), "0 seconds");
+        assert_eq!(format_seconds(1), "1 second");
+        assert_eq!(format_seconds(59), "59 seconds");
+        assert_eq!(format_seconds(60), "1 minute");
+        assert_eq!(format_seconds(120), "2 minutes");
+        assert_eq!(format_seconds(121), "2 minutes, 1 second");
+        assert_eq!(format_seconds(one_hour), "1 hour");
+        assert_eq!(format_seconds(one_hour + 1), "1 hour, 1 second");
+        assert_eq!(
+            format_seconds(one_hour + 121),
+            "1 hour, 2 minutes, 1 second"
+        );
+        assert_eq!(format_seconds((one_hour * 4) + 59), "4 hours, 59 seconds");
+        assert_eq!(format_seconds(one_day), "1 day");
+        assert_eq!(format_seconds(one_day + 2), "1 day, 2 seconds");
+        Ok(())
+    }
+}

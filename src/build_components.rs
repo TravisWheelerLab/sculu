@@ -598,7 +598,7 @@ fn take_best_alignments(
 }
 
 // --------------------------------------------------
-fn parse_alignment(blast_out: &PathBuf) -> Result<Vec<RmBlastOutput>> {
+pub fn parse_alignment(blast_out: &PathBuf) -> Result<Vec<RmBlastOutput>> {
     // BLAST output fails to include headers
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
@@ -697,4 +697,117 @@ fn msa_to_fasta(
     }
 
     Ok(num_taken)
+}
+
+// --------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::{check_family_instances, parse_alignment};
+    use crate::types::{CheckFamilyInstancesArgs, RmBlastOutput};
+    use anyhow::Result;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_parse_alignment() -> Result<()> {
+        let path = PathBuf::from("./tests/inputs/blast-consensi-self.tsv");
+        let res = parse_alignment(&path);
+        assert!(res.is_ok());
+
+        let alignments = res.unwrap();
+        assert_eq!(alignments.len(), 1000);
+
+        let first = alignments.first().unwrap();
+        assert_eq!(
+            first,
+            &RmBlastOutput {
+                score: 710,
+                target: "Chompy-2a_tua".to_string(),
+                query: "Chompy-2a_tua".to_string(),
+                query_len: 79,
+                query_start: 1,
+                query_end: 79,
+                subject_len: 79,
+                subject_start: 1,
+                subject_end: 79,
+                cpg_kdiv: 0.0,
+                pident: 100.0,
+            }
+        );
+
+        let last = alignments.last().unwrap();
+        assert_eq!(
+            last,
+            &RmBlastOutput {
+                score: 409,
+                target: "Harbinger-3-L_tua".to_string(),
+                query: "tuafam018707_consensus".to_string(),
+                query_len: 6639,
+                query_start: 5945,
+                query_end: 6261,
+                subject_len: 1898,
+                subject_start: 173,
+                subject_end: 497,
+                cpg_kdiv: 41.17,
+                pident: 54.571,
+            }
+        );
+
+        Ok(())
+    }
+
+    //#[test]
+    //fn test_check_family_instances() -> Result<()> {
+    //    // The consensus_path contains duplicated IDs
+    //    let consensus_path = PathBuf::from("tests/inputs/dup_consensi.fa");
+    //    let instances_100 = &[PathBuf::from(
+    //        "tests/inputs/instances_100/AluY.fa".to_string(),
+    //    )];
+
+    //    //let res = check_family_instances(&consensi, instances_100);
+    //    let res = check_family_instances(CheckFamilyInstancesArgs {
+    //        consensus_path,
+    //        instances_dir: &raw_instances_dir,
+    //        out_dir: &args.outdir,
+    //        taken_instances_dir: &taken_instances_dir,
+    //        config: &config,
+    //        alphabet: &args.alphabet,
+    //        num_threads,
+    //    })?;
+
+    //    assert!(res.is_err());
+    //    assert_eq!(
+    //        res.unwrap_err().to_string(),
+    //        "The following consensi IDs are duplicated: AluYb9, AluYm1"
+    //    );
+
+    //    // The consensi has 5 unique IDs but the instances only 2
+    //    let consensi = PathBuf::from("tests/inputs/consensi.fa");
+    //    let instances_100 = &[
+    //        PathBuf::from("tests/inputs/AluY.fa".to_string()),
+    //        PathBuf::from("tests/inputs/AluYm1.fa".to_string()),
+    //    ];
+    //    let res = check_family_instances(&consensi, instances_100);
+    //    assert!(res.is_err());
+    //    assert_eq!(
+    //        res.unwrap_err().to_string(),
+    //        "Missing the following instances: AluYa5, AluYb8, AluYb9",
+    //    );
+
+    //    // The consensi has 2 unique IDs but the instances have 4
+    //    let consensi = PathBuf::from("tests/inputs/two_consensi.fa");
+    //    let instances_100 = vec![
+    //        PathBuf::from("tests/inputs/AluY.fa".to_string()),
+    //        PathBuf::from("tests/inputs/AluYa5.fa".to_string()),
+    //        PathBuf::from("tests/inputs/AluYb9.fa".to_string()),
+    //        PathBuf::from("tests/inputs/AluYm1.fa".to_string()),
+    //    ];
+    //    let res = check_family_instances(&consensi, &instances_100);
+    //    assert!(res.is_err());
+    //    assert_eq!(
+    //        res.unwrap_err().to_string(),
+    //        "Missing the following consensi: AluYb9, AluYm1",
+    //    );
+
+    //    Ok(())
+    //}
 }

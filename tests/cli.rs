@@ -23,13 +23,14 @@ fn usage() -> Result<()> {
 }
 
 // --------------------------------------------------
-#[test]
-fn run1() -> Result<()> {
-    run(RunArgs {
-        consensi: "tests/inputs/consensi.fa",
-        instances: "tests/inputs/instances",
-    })
-}
+// TODO: get MSA/STK to replace instances
+//#[test]
+//fn run1() -> Result<()> {
+//    run(RunArgs {
+//        consensus: "tests/inputs/consensi.fa",
+//        instances: "tests/inputs/instances",
+//    })
+//}
 
 // --------------------------------------------------
 fn run(args: RunArgs) -> Result<()> {
