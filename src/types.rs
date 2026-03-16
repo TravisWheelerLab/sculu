@@ -48,21 +48,21 @@ pub struct ConfigArgs {
 #[derive(Debug, Parser)]
 #[command()]
 pub struct ConcatArgs {
-    /// Output file
-    #[arg(short, long, value_name = "OUTFILE", required = true)]
-    pub outfile: PathBuf,
-
     /// The filtered FASTA consensus from "components"
     #[arg(long, value_name = "CONSENSUS", required = true)]
     pub consensus_path: PathBuf,
+
+    /// Merged components from "cluster"
+    #[arg(long, value_name = "COMPONENTS", num_args = 0..)]
+    pub components: Vec<PathBuf>,
 
     /// Singletons file from "components"
     #[arg(long, value_name = "SINGLETONS")]
     pub singletons: Option<PathBuf>,
 
-    /// Merged components from "cluster"
-    #[arg(long, value_name = "COMPONENTS", num_args = 0..)]
-    pub components: Vec<PathBuf>,
+    /// Output directory
+    #[arg(short, long, value_name = "OUTDIR", default_value = "sculu-out")]
+    pub outdir: PathBuf,
 }
 
 #[derive(Debug, Parser, Clone)]

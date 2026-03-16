@@ -67,10 +67,10 @@ fn run(args: Cli) -> Result<()> {
             Ok(())
         }
         Command::Concat(args) => {
-            sculu::concat_files(args)?;
+            sculu::concat::concat_files(args)?;
             println!(
                 r#"Wrote output to "{}" in {}."#,
-                args.outfile.display(),
+                args.outdir.display(),
                 format_seconds(start.elapsed().as_secs()),
             );
             Ok(())

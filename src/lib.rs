@@ -1,11 +1,12 @@
 pub mod build_components;
 pub mod cluster;
 pub mod common;
+pub mod concat;
 pub mod graph;
 pub mod types;
 
 use crate::{
-    common::{copy_fasta, default_config, open, open_for_write, read_lines},
+    common::{default_config, open_for_write},
     types::{
         ClusterArgs, ClusterResult, ComponentsArgs, ConcatArgs, ConfigArgs,
         RmBlastOutput, RunArgs,
@@ -13,11 +14,6 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use log::debug;
-use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
-use std::{
-    fs,
-    io::{BufReader, BufWriter, Write},
-};
 
 // --------------------------------------------------
 pub fn run_sculu(args: &RunArgs, num_threads: usize) -> Result<()> {
@@ -53,40 +49,20 @@ pub fn run_sculu(args: &RunArgs, num_threads: usize) -> Result<()> {
     }
     debug!("clusters =\n{clusters:#?}");
 
-    let final_seed_alignments_dir = args.outdir.join("seed_alignments");
-    fs::create_dir_all(&final_seed_alignments_dir)?;
-
-    if let Some(singletons) = &built_components.singletons {
-        let seed_alignments_dir = intermediate_dir.join("seed_alignments");
-        if !seed_alignments_dir.is_dir() {
-            bail!(r#"Missing "{}""#, seed_alignments_dir.display());
-        }
-
-        for singleton in read_lines(&singletons)? {
-            let filename = format!("{singleton}.stk");
-            let seed_alignments = seed_alignments_dir.join(&filename);
-            if seed_alignments.is_file() {
-                fs::copy(seed_alignments, final_seed_alignments_dir.join(&filename))?;
-            } else {
-                eprintln!(r#"Missing "{}""#, seed_alignments.display());
-            }
-        }
-    }
-
     // TODO: Need to renumber the "sculufam0-1" -> "sculufam1"
     // and copy the MSA to the final seed alignments dir
     // but this function was written to run from the CLI with
     // just a list of component filename
     // I could just look for the final ".stk" but I've gone to the trouble
     // of returning the family_to_msa table.
-    concat_files(&ConcatArgs {
+    concat::concat_files(&ConcatArgs {
         consensus_path: built_components.consensus_path,
         singletons: built_components.singletons.clone(),
         components: clusters
             .iter()
             .map(|v| v.consensus_path.clone())
             .collect::<Vec<_>>(),
-        outfile: args.outdir.join("sculu_families.fa"),
+        outdir: args.outdir.clone(),
     })?;
 
     Ok(())
@@ -100,33 +76,6 @@ pub fn write_config(args: &ConfigArgs) -> Result<()> {
 
     let mut outfile = open_for_write(&args.outfile)?;
     writeln!(&mut outfile, "{}", toml::to_string(&default_config())?)?;
-    Ok(())
-}
-
-// --------------------------------------------------
-pub fn concat_files(args: &ConcatArgs) -> Result<()> {
-    let mut fasta_writer =
-        FastaWriter::new(BufWriter::new(open_for_write(&args.outfile)?));
-
-    if let Some(file) = &args.singletons {
-        let singletons = read_lines(file)?;
-        debug!(
-            "Copying {} sequences from singletons file",
-            singletons.len()
-        );
-        copy_fasta(&singletons, &args.consensus_path, &mut fasta_writer)?;
-    }
-
-    for component_file in &args.components {
-        debug!(r#"Copying from "{}""#, component_file.display());
-        let mut reader = FastaReader::new(BufReader::new(open(component_file)?));
-        for record in reader.records().map_while(Result::ok) {
-            fasta_writer.write_record(&record)?;
-        }
-    }
-
-    debug!(r#"Final output written to "{}""#, args.outfile.display());
-
     Ok(())
 }
 

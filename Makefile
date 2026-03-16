@@ -2,7 +2,7 @@ FLY = /data/Dfam/minifly
 
 fly:
 	rm -rf $(FLY)/sculu-out
-	cargo run -- --logfile minifly.log \
+	cargo run -- --logfile $(FLY)/minifly.log \
 		run \
 		--alphabet   dna \
 		--consensus  $(FLY)/consensi.fa \
