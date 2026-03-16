@@ -26,7 +26,7 @@ pub fn concat_files(args: &ConcatArgs) -> Result<()> {
 
     if let Some(singletons_file) = &args.singletons {
         // The singletons file will have one family name per line
-        let family_names = read_lines(&singletons_file)?;
+        let family_names = read_lines(singletons_file)?;
         debug!(
             "Copying {} sequences from singletons file",
             family_names.len()

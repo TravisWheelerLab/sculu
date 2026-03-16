@@ -620,8 +620,8 @@ fn parse_alignment(blast_out: &PathBuf) -> Result<Vec<RmBlastOutput>> {
 // Currently just assuming STK format, will the be OK for protein?
 fn msa_to_fasta(
     input_dir: &PathBuf,
-    seed_alignments_dir: &PathBuf,
-    fasta_dir: &PathBuf,
+    seed_alignments_dir: &Path,
+    fasta_dir: &Path,
 ) -> Result<usize> {
     debug!(
         r#"Writing seed alignments as FASTA into "{}""#,
@@ -655,9 +655,9 @@ fn msa_to_fasta(
             let line = line.trim();
             cur_rec.extend_from_slice(&buf);
 
-            if comment.is_match(&line) {
+            if comment.is_match(line) {
                 continue;
-            } else if delimiter.is_match(&line) {
+            } else if delimiter.is_match(line) {
                 // Reset output file when we reach the end of a record
                 out_file = None;
                 if !cur_rec.is_empty() {
@@ -670,7 +670,7 @@ fn msa_to_fasta(
                     cur_rec.clear();
                 }
                 cur_id = None;
-            } else if let Some(cap) = meta.captures(&line) {
+            } else if let Some(cap) = meta.captures(line) {
                 if &cap[1] == "GF" && &cap[2] == "ID" {
                     let id = &cap[3].trim();
                     num_taken += 1;
@@ -678,7 +678,7 @@ fn msa_to_fasta(
                     out_file = Some(File::create(&filename)?);
                     cur_id = Some(id.to_string());
                 }
-            } else if let Some(cap) = sequence.captures(&line) {
+            } else if let Some(cap) = sequence.captures(line) {
                 if let Some(ref mut fh) = out_file {
                     let seq = cap[2].replace(".", "-");
                     writeln!(fh, ">{}\n{}", &cap[1], seq.replace("-", ""))?;
