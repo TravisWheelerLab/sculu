@@ -75,12 +75,13 @@ pub fn concat_files(args: &ConcatArgs) -> Result<()> {
                 let new_filename = format!("{new_family_name}.stk");
                 let mut dest_fh =
                     open_for_write(&final_seed_alignments_dir.join(&new_filename))?;
+
                 for line in read_lines(&msa)? {
                     writeln!(
                         dest_fh,
                         "{}",
                         if line.starts_with("#=GF ID ") {
-                            format!("#GF ID {new_family_name}")
+                            format!("#=GF ID {new_family_name}")
                         } else {
                             line
                         }
