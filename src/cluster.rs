@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use bio::alphabets::dna::revcomp;
 use itertools::Itertools;
 use kseq::parse_reader;
-use log::debug;
+use log::{debug, warn};
 use newick::Newick;
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
 use regex::Regex;
@@ -455,7 +455,7 @@ fn merge_families(
         for (fam, num) in &[(f1, num_from1), (f2, num_from2)] {
             let fasta = family_to_instance
                 .get(fam)
-                .unwrap_or_else(|| panic!("Missing instances for family '{fam}'"));
+                .ok_or_else(|| anyhow!("Missing instances for family '{fam}'"))?;
             let flip = if args.flipped && !one_flipped {
                 one_flipped = true;
                 true
@@ -498,9 +498,9 @@ fn msa_protein(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
     ]);
     let res = run_cmd(cmd)?;
 
-    let outdir = input_file.parent().unwrap_or_else(|| {
-        panic!("Failed to get parent dir for {}", input_file.display())
-    });
+    let outdir = input_file
+        .parent()
+        .ok_or_else(|| anyhow!("Failed to get parent dir for {}", input_file.display()))?;
 
     let msa_path = outdir.join("msa.fa");
     {
@@ -559,9 +559,9 @@ fn msa_dna(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
 
     let _ = run_cmd(cmd)?;
 
-    let outdir = input_file.parent().unwrap_or_else(|| {
-        panic!("Failed to get parent dir for {}", input_file.display())
-    });
+    let outdir = input_file
+        .parent()
+        .ok_or_else(|| anyhow!("Failed to get parent dir for {}", input_file.display()))?;
     let consensus_path = outdir.join("msa-input.fa.refiner_cons");
     let msa_path = outdir.join("msa-input.fa.refiner.stk");
     for path in [&consensus_path, &msa_path] {
@@ -781,7 +781,7 @@ fn extract_scores(
                     query: query_name.clone(),
                 })?
             }
-            _ => eprintln!("Cannot find query '{}'", rec.query),
+            _ => warn!("Cannot find query '{}'", rec.query),
         }
     }
 

@@ -2,8 +2,8 @@ use crate::{
     common::{copy_fasta, open, open_for_write, read_lines},
     types::ConcatArgs,
 };
-use anyhow::{bail, Result};
-use log::debug;
+use anyhow::{anyhow, bail, Result};
+use log::{debug, warn};
 use noodles_fasta::{
     self,
     io::Reader as FastaReader,
@@ -47,13 +47,15 @@ pub fn concat_files(args: &ConcatArgs) -> Result<()> {
             if seed_alignments.is_file() {
                 fs::copy(seed_alignments, final_seed_alignments_dir.join(&filename))?;
             } else {
-                eprintln!(r#"Missing "{}""#, seed_alignments.display());
+                warn!(r#"Missing "{}""#, seed_alignments.display());
             }
         }
     }
 
     for component_file in &args.components {
-        let component_dir = component_file.parent().expect("Cannot get parent dir");
+        let component_dir = component_file
+            .parent()
+            .ok_or_else(|| anyhow!("Cannot get parent dir of '{}'", component_file.display()))?;
         debug!(r#"Copying from "{}""#, component_file.display());
         let mut reader = FastaReader::new(BufReader::new(open(component_file)?));
         for (record_num, result) in reader.records().enumerate() {
@@ -88,7 +90,7 @@ pub fn concat_files(args: &ConcatArgs) -> Result<()> {
                     )?;
                 }
             } else {
-                eprintln!(r#"Missing "{}""#, seed_alignments.display());
+                warn!(r#"Missing "{}""#, seed_alignments.display());
             }
         }
     }

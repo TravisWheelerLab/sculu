@@ -13,7 +13,7 @@ use crate::{
 use anyhow::{anyhow, bail, Result};
 use itertools::Itertools;
 use kseq::parse_reader;
-use log::debug;
+use log::{debug, warn};
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
 use rayon::prelude::*;
 use regex::Regex;
@@ -130,7 +130,7 @@ fn check_family_instances(
                 config: args.config,
                 num_threads: args.num_threads,
             }) {
-                Err(e) => eprintln!("Warning: {e}"),
+                Err(e) => warn!("{e}"),
                 Ok(num_taken) => {
                     debug!(r#"Took {num_taken} instances for family "{family_name}""#);
                 }
@@ -420,7 +420,7 @@ fn select_instances(args: SelectInstancesArgs) -> Result<usize> {
     let consensus_len = reader
         .records()
         .next()
-        .unwrap_or_else(|| panic!("failed to read {db_path:?}"))
+        .ok_or_else(|| anyhow!("failed to read {db_path:?}"))?
         .map(|rec| rec.sequence().len())?;
 
     // BLAST the instances to the consensus
@@ -702,8 +702,8 @@ fn msa_to_fasta(
 // --------------------------------------------------
 #[cfg(test)]
 mod tests {
-    use super::{check_family_instances, parse_alignment};
-    use crate::types::{CheckFamilyInstancesArgs, RmBlastOutput};
+    use super::parse_alignment;
+    use crate::types::RmBlastOutput;
     use anyhow::Result;
     use std::path::PathBuf;
 
