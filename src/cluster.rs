@@ -15,7 +15,7 @@ use kseq::parse_reader;
 use log::{debug, warn};
 use newick::Newick;
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
-use regex::Regex;
+use lazy_regex::regex;
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
@@ -45,7 +45,7 @@ pub fn cluster_component(
 
     debug!("Merging component '{}'", args.component.display());
 
-    let filename_re = Regex::new(r"component-(\d+)").unwrap();
+    let filename_re = regex!(r"component-(\d+)");
     let component_number =
         match filename_re.captures(args.component.to_string_lossy().as_ref()) {
             Some(caps) => caps.get(1).unwrap().as_str().to_string(),
@@ -142,7 +142,7 @@ pub fn cluster_component(
     batch_consensus = consensus_path;
 
     // Start merging
-    let trailing_semi = Regex::new(";$").unwrap();
+    let trailing_semi = regex!(";$");
     let mut prev_scores: Option<PathBuf> = None;
     let mut next_family_number = 1;
     let mut sculu_name_to_desc: HashMap<String, String> = HashMap::new();

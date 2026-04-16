@@ -16,7 +16,7 @@ use kseq::parse_reader;
 use log::{debug, warn};
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
 use rayon::prelude::*;
-use regex::Regex;
+use lazy_regex::regex;
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
@@ -630,10 +630,10 @@ fn msa_to_fasta(
 
     let entries = fs::read_dir(input_dir)
         .map_err(|e| anyhow!(r#"Failed to read dir "{}": {e}"#, input_dir.display()))?;
-    let comment = Regex::new(r"^#\s").unwrap();
-    let meta = Regex::new(r"^#=(\S{2})\s+(\S{2})\s+(.+)").unwrap();
-    let sequence = Regex::new(r"^(\S+)\s+(\S+)$").unwrap();
-    let delimiter = Regex::new(r"^[/]{2}$").unwrap();
+    let comment = regex!(r"^#\s");
+    let meta = regex!(r"^#=(\S{2})\s+(\S{2})\s+(.+)");
+    let sequence = regex!(r"^(\S+)\s+(\S+)$");
+    let delimiter = regex!(r"^[/]{2}$");
     let mut cur_rec: Vec<u8> = vec![];
     let mut cur_id: Option<String> = None;
     let mut out_file: Option<File> = None;
