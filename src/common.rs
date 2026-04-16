@@ -83,98 +83,23 @@ pub fn run_rmblastn(
     config: &Config,
     num_threads: usize,
 ) -> Result<PathBuf> {
-    fs::create_dir_all(out_dir)?;
-    let outfile = out_dir.join("blast.tsv");
-
-    if outfile.exists() {
-        debug!("Reusing BLAST output file '{}'", outfile.display());
-    } else {
-        let db_path = &out_dir.join("db");
-        let makeblastdb_args = &[
-            "-out".to_string(),
-            db_path.to_string_lossy().to_string(),
-            "-parse_seqids".to_string(),
-            "-dbtype".to_string(),
-            "nucl".to_string(),
-            "-in".to_string(),
-            db.to_string_lossy().to_string(),
-        ];
-
-        let makeblastdb =
-            which("makeblastdb").map_err(|e| anyhow!("makeblastdb: {e}"))?;
-        let mut cmd = Command::new(makeblastdb);
-        cmd.args(makeblastdb_args);
-        let _ = run_cmd(cmd)?;
-
-        let rmblastn = which("rmblastn").map_err(|e| anyhow!("rmblastn: {e}"))?;
-        let mut cmd = Command::new(&rmblastn);
-        let mut rmblastn_args = vec![
-            "-db".to_string(),
-            db_path.to_string_lossy().to_string(),
-            "-query".to_string(),
-            query.to_string_lossy().to_string(),
-            "-out".to_string(),
-            outfile.to_string_lossy().to_string(),
-            "-outfmt".to_string(),
-            "6 score qseqid sseqid qlen qstart qend slen sstart send cpg_kdiv pident"
-                .to_string(),
-            "-num_threads".to_string(),
-            num_threads.to_string(),
-            "-num_alignments".to_string(),
-            "9999999".to_string(),
-            "-mask_level".to_string(),
-            config.rmblastn.mask_level.to_string(),
-            "-gapopen".to_string(),
-            config.rmblastn.gap_open.to_string(),
-            "-gapextend".to_string(),
-            config.rmblastn.gap_extend.to_string(),
-            "-word_size".to_string(),
-            config.rmblastn.word_size.to_string(),
-            "-min_raw_gapped_score".to_string(),
-            config.rmblastn.min_raw_gapped_score.to_string(),
-            "-xdrop_ungap".to_string(),
-            (config.rmblastn.min_raw_gapped_score * 2).to_string(),
-            "-xdrop_gap".to_string(),
-            (config.rmblastn.min_raw_gapped_score / 2).to_string(),
-            "-xdrop_gap_final".to_string(),
-            config.rmblastn.min_raw_gapped_score.to_string(),
-            "-dust".to_string(),
-            if config.rmblastn.dust {
-                "yes".to_string()
-            } else {
-                "no".to_string()
-            },
-        ];
-
-        if config.rmblastn.complexity_adjust {
-            rmblastn_args.push("-complexity_adjust".to_string());
-        }
-
-        if let Some(matrix) = config.rmblastn.matrix.as_ref() {
-            if !matrix.is_file() {
-                bail!("Rmblast matrix '{}' does not exist", matrix.display());
-            }
-
-            let matrix_filename = matrix.file_name().unwrap_or_else(|| {
-                panic!("Failed to get filename from '{}'", matrix.display())
-            });
-
-            let matrix_dir = matrix.parent().unwrap_or_else(|| {
-                panic!("Failed to get dirname from '{}'", matrix.display())
-            });
-
-            cmd.env("BLASTMAT", matrix_dir);
-            rmblastn_args.extend_from_slice(&[
-                "-matrix".to_string(),
-                matrix_filename.to_string_lossy().to_string(),
-            ]);
-        }
-
-        cmd.current_dir(out_dir).args(rmblastn_args);
-        let _ = run_cmd(cmd)?;
-    }
-
-    Ok(outfile)
+    run_blast(BlastParams {
+        out_dir,
+        db,
+        query,
+        num_threads,
+        db_type: "nucl",
+        executable: "rmblastn",
+        gap_open: config.rmblastn.gap_open,
+        gap_extend: config.rmblastn.gap_extend,
+        word_size: config.rmblastn.word_size,
+        mask_level: config.rmblastn.mask_level,
+        min_raw_gapped_score: config.rmblastn.min_raw_gapped_score,
+        dust: config.rmblastn.dust,
+        complexity_adjust: config.rmblastn.complexity_adjust,
+        matrix: config.rmblastn.matrix.as_ref(),
+        run_in_out_dir: true,
+    })
 }
 
 // --------------------------------------------------
@@ -185,96 +110,129 @@ pub fn run_blastp(
     config: &Config,
     num_threads: usize,
 ) -> Result<PathBuf> {
-    fs::create_dir_all(out_dir)?;
-    let outfile = out_dir.join("blast.tsv");
+    run_blast(BlastParams {
+        out_dir,
+        db,
+        query,
+        num_threads,
+        db_type: "prot",
+        executable: "blastp",
+        gap_open: config.blastp.gap_open,
+        gap_extend: config.blastp.gap_extend,
+        word_size: config.blastp.word_size,
+        mask_level: config.blastp.mask_level,
+        min_raw_gapped_score: config.blastp.min_raw_gapped_score,
+        dust: config.blastp.dust,
+        complexity_adjust: config.blastp.complexity_adjust,
+        matrix: config.blastp.matrix.as_ref(),
+        run_in_out_dir: false,
+    })
+}
+
+// --------------------------------------------------
+struct BlastParams<'a> {
+    out_dir: &'a PathBuf,
+    db: &'a Path,
+    query: &'a Path,
+    num_threads: usize,
+    db_type: &'static str,
+    executable: &'static str,
+    gap_open: usize,
+    gap_extend: usize,
+    word_size: usize,
+    mask_level: usize,
+    min_raw_gapped_score: usize,
+    dust: bool,
+    complexity_adjust: bool,
+    matrix: Option<&'a PathBuf>,
+    // rmblastn must run from out_dir so relative matrix paths resolve correctly
+    run_in_out_dir: bool,
+}
+
+fn run_blast(p: BlastParams) -> Result<PathBuf> {
+    fs::create_dir_all(p.out_dir)?;
+    let outfile = p.out_dir.join("blast.tsv");
 
     if outfile.exists() {
         debug!("Reusing BLAST output file '{}'", outfile.display());
-    } else {
-        let db_path = &out_dir.join("db");
-        let makeblastdb_args = &[
-            "-out".to_string(),
-            db_path.to_string_lossy().to_string(),
-            "-parse_seqids".to_string(),
-            "-dbtype".to_string(),
-            "prot".to_string(),
-            "-in".to_string(),
-            db.to_string_lossy().to_string(),
-        ];
-        let makeblastdb =
-            which("makeblastdb").map_err(|e| anyhow!("makeblastdb: {e}"))?;
-
-        let mut cmd = Command::new(makeblastdb);
-        cmd.args(makeblastdb_args);
-        let _ = run_cmd(cmd)?;
-
-        let blastp = which("blastp").map_err(|e| anyhow!("blastp: {e}"))?;
-        let mut cmd = Command::new(&blastp);
-        let mut blastp_args = vec![
-            "-db".to_string(),
-            db_path.to_string_lossy().to_string(),
-            "-query".to_string(),
-            query.to_string_lossy().to_string(),
-            "-out".to_string(),
-            outfile.to_string_lossy().to_string(),
-            "-outfmt".to_string(),
-            "6 score qseqid sseqid qlen qstart qend slen sstart send cpg_kdiv pident"
-                .to_string(),
-            "-num_threads".to_string(),
-            num_threads.to_string(),
-            "-num_alignments".to_string(),
-            "9999999".to_string(),
-            "-gapopen".to_string(),
-            config.blastp.gap_open.to_string(),
-            "-gapextend".to_string(),
-            config.blastp.gap_extend.to_string(),
-            "-word_size".to_string(),
-            config.blastp.word_size.to_string(),
-            "-xdrop_ungap".to_string(),
-            (config.blastp.min_raw_gapped_score * 2).to_string(),
-            "-xdrop_gap".to_string(),
-            (config.blastp.min_raw_gapped_score / 2).to_string(),
-            "-xdrop_gap_final".to_string(),
-            config.blastp.min_raw_gapped_score.to_string(),
-            "-mask_level".to_string(),
-            config.blastp.mask_level.to_string(),
-            "-min_raw_gapped_score".to_string(),
-            config.blastp.min_raw_gapped_score.to_string(),
-            "-dust".to_string(),
-            if config.blastp.dust {
-                "yes".to_string()
-            } else {
-                "no".to_string()
-            },
-        ];
-
-        if config.blastp.complexity_adjust {
-            blastp_args.push("-complexity_adjust".to_string());
-        }
-
-        if let Some(matrix) = config.blastp.matrix.as_ref() {
-            if !matrix.is_file() {
-                bail!("blastp matrix '{}' does not exist", matrix.display());
-            }
-
-            let matrix_filename = matrix.file_name().unwrap_or_else(|| {
-                panic!("Failed to get filename from '{}'", matrix.display())
-            });
-
-            let matrix_dir = matrix.parent().unwrap_or_else(|| {
-                panic!("Failed to get dirname from '{}'", matrix.display())
-            });
-
-            cmd.env("BLASTMAT", matrix_dir);
-            blastp_args.extend_from_slice(&[
-                "-matrix".to_string(),
-                matrix_filename.to_string_lossy().to_string(),
-            ]);
-        }
-
-        cmd.args(blastp_args);
-        let _ = run_cmd(cmd)?;
+        return Ok(outfile);
     }
+
+    let db_path = p.out_dir.join("db");
+    let makeblastdb = which("makeblastdb").map_err(|e| anyhow!("makeblastdb: {e}"))?;
+    let mut cmd = Command::new(makeblastdb);
+    cmd.args([
+        "-out",
+        &db_path.to_string_lossy(),
+        "-parse_seqids",
+        "-dbtype",
+        p.db_type,
+        "-in",
+        &p.db.to_string_lossy(),
+    ]);
+    let _ = run_cmd(cmd)?;
+
+    let blast_exe = which(p.executable).map_err(|e| anyhow!("{}: {e}", p.executable))?;
+    let mut cmd = Command::new(blast_exe);
+    let mut args = vec![
+        "-db".to_string(),
+        db_path.to_string_lossy().to_string(),
+        "-query".to_string(),
+        p.query.to_string_lossy().to_string(),
+        "-out".to_string(),
+        outfile.to_string_lossy().to_string(),
+        "-outfmt".to_string(),
+        "6 score qseqid sseqid qlen qstart qend slen sstart send cpg_kdiv pident".to_string(),
+        "-num_threads".to_string(),
+        p.num_threads.to_string(),
+        "-num_alignments".to_string(),
+        "9999999".to_string(),
+        "-gapopen".to_string(),
+        p.gap_open.to_string(),
+        "-gapextend".to_string(),
+        p.gap_extend.to_string(),
+        "-word_size".to_string(),
+        p.word_size.to_string(),
+        "-mask_level".to_string(),
+        p.mask_level.to_string(),
+        "-min_raw_gapped_score".to_string(),
+        p.min_raw_gapped_score.to_string(),
+        "-xdrop_ungap".to_string(),
+        (p.min_raw_gapped_score * 2).to_string(),
+        "-xdrop_gap".to_string(),
+        (p.min_raw_gapped_score / 2).to_string(),
+        "-xdrop_gap_final".to_string(),
+        p.min_raw_gapped_score.to_string(),
+        "-dust".to_string(),
+        if p.dust { "yes" } else { "no" }.to_string(),
+    ];
+
+    if p.complexity_adjust {
+        args.push("-complexity_adjust".to_string());
+    }
+
+    if let Some(matrix) = p.matrix {
+        if !matrix.is_file() {
+            bail!("{} matrix '{}' does not exist", p.executable, matrix.display());
+        }
+        let matrix_filename = matrix
+            .file_name()
+            .ok_or_else(|| anyhow!("Failed to get filename from '{}'", matrix.display()))?;
+        let matrix_dir = matrix
+            .parent()
+            .ok_or_else(|| anyhow!("Failed to get dirname from '{}'", matrix.display()))?;
+        cmd.env("BLASTMAT", matrix_dir);
+        args.extend_from_slice(&[
+            "-matrix".to_string(),
+            matrix_filename.to_string_lossy().to_string(),
+        ]);
+    }
+
+    if p.run_in_out_dir {
+        cmd.current_dir(p.out_dir);
+    }
+    cmd.args(args);
+    let _ = run_cmd(cmd)?;
 
     Ok(outfile)
 }
