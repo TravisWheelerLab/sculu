@@ -1,4 +1,4 @@
-use crate::types::{BlastpConfig, Config, GeneralConfig, RmblastnConfig};
+use crate::types::{BlastParams, BlastpConfig, Config, GeneralConfig, RmblastnConfig};
 use anyhow::{anyhow, bail, Result};
 use chrono::Duration;
 use log::debug;
@@ -38,7 +38,7 @@ pub fn copy_fasta<W: Write>(
     source: &PathBuf,
     destination: &mut FastaWriter<W>,
 ) -> Result<usize> {
-    let mut reader = FastaReader::new(open(source)?);
+    let mut reader = FastaReader::new(open_file(source)?);
     let mut num_taken = 0;
     for result in reader.records() {
         let record = result?;
@@ -53,10 +53,14 @@ pub fn copy_fasta<W: Write>(
 }
 
 // --------------------------------------------------
-pub fn open(filename: &PathBuf) -> Result<Box<dyn BufRead>> {
-    Ok(Box::new(BufReader::new(File::open(filename).map_err(
-        |e| anyhow!("Cannot read {}: {e}", filename.display()),
-    )?)))
+pub fn open_file(filename: &PathBuf) -> Result<Box<dyn BufRead>> {
+    //Ok(Box::new(BufReader::new(File::open(filename).map_err(
+    //    |e| anyhow!("Cannot read {}: {e}", filename.display()),
+    //)?)))
+
+    Ok(Box::new(BufReader::new(
+        File::open(filename).map_err(|e| anyhow!("{}: {e}", filename.display()))?,
+    )))
 }
 
 // --------------------------------------------------
@@ -68,7 +72,7 @@ pub fn open_for_write(filename: &PathBuf) -> Result<Box<dyn Write>> {
 
 // --------------------------------------------------
 pub fn read_lines(path: &PathBuf) -> Result<Vec<String>> {
-    Ok(open(path)?
+    Ok(open_file(path)?
         .lines()
         .map_while(Result::ok)
         .filter(|line| !line.is_empty())
@@ -130,25 +134,6 @@ pub fn run_blastp(
 }
 
 // --------------------------------------------------
-struct BlastParams<'a> {
-    out_dir: &'a PathBuf,
-    db: &'a Path,
-    query: &'a Path,
-    num_threads: usize,
-    db_type: &'static str,
-    executable: &'static str,
-    gap_open: usize,
-    gap_extend: usize,
-    word_size: usize,
-    mask_level: usize,
-    min_raw_gapped_score: usize,
-    dust: bool,
-    complexity_adjust: bool,
-    matrix: Option<&'a PathBuf>,
-    // rmblastn must run from out_dir so relative matrix paths resolve correctly
-    run_in_out_dir: bool,
-}
-
 fn run_blast(p: BlastParams) -> Result<PathBuf> {
     fs::create_dir_all(p.out_dir)?;
     let outfile = p.out_dir.join("blast.tsv");
@@ -172,7 +157,8 @@ fn run_blast(p: BlastParams) -> Result<PathBuf> {
     ]);
     let _ = run_cmd(cmd)?;
 
-    let blast_exe = which(p.executable).map_err(|e| anyhow!("{}: {e}", p.executable))?;
+    let blast_exe =
+        which(p.executable).map_err(|e| anyhow!("{}: {e}", p.executable))?;
     let mut cmd = Command::new(blast_exe);
     let mut args = vec![
         "-db".to_string(),
@@ -182,7 +168,8 @@ fn run_blast(p: BlastParams) -> Result<PathBuf> {
         "-out".to_string(),
         outfile.to_string_lossy().to_string(),
         "-outfmt".to_string(),
-        "6 score qseqid sseqid qlen qstart qend slen sstart send cpg_kdiv pident".to_string(),
+        "6 score qseqid sseqid qlen qstart qend slen sstart send cpg_kdiv pident"
+            .to_string(),
         "-num_threads".to_string(),
         p.num_threads.to_string(),
         "-num_alignments".to_string(),
@@ -213,14 +200,18 @@ fn run_blast(p: BlastParams) -> Result<PathBuf> {
 
     if let Some(matrix) = p.matrix {
         if !matrix.is_file() {
-            bail!("{} matrix '{}' does not exist", p.executable, matrix.display());
+            bail!(
+                "{} matrix '{}' does not exist",
+                p.executable,
+                matrix.display()
+            );
         }
-        let matrix_filename = matrix
-            .file_name()
-            .ok_or_else(|| anyhow!("Failed to get filename from '{}'", matrix.display()))?;
-        let matrix_dir = matrix
-            .parent()
-            .ok_or_else(|| anyhow!("Failed to get dirname from '{}'", matrix.display()))?;
+        let matrix_filename = matrix.file_name().ok_or_else(|| {
+            anyhow!("Failed to get filename from '{}'", matrix.display())
+        })?;
+        let matrix_dir = matrix.parent().ok_or_else(|| {
+            anyhow!("Failed to get dirname from '{}'", matrix.display())
+        })?;
         cmd.env("BLASTMAT", matrix_dir);
         args.extend_from_slice(&[
             "-matrix".to_string(),
@@ -228,9 +219,9 @@ fn run_blast(p: BlastParams) -> Result<PathBuf> {
         ]);
     }
 
-    if p.run_in_out_dir {
-        cmd.current_dir(p.out_dir);
-    }
+    //if p.run_in_out_dir {
+    //    cmd.current_dir(p.out_dir);
+    //}
     cmd.args(args);
     let _ = run_cmd(cmd)?;
 
@@ -324,7 +315,7 @@ pub fn default_config() -> Config {
 pub fn get_config(config_file: &Option<PathBuf>) -> Result<Config> {
     match config_file {
         Some(filename) => {
-            let mut file = open(filename)?;
+            let mut file = open_file(filename)?;
             let mut contents = String::new();
             let _bytes = file.read_to_string(&mut contents);
             let config: Config = toml::from_str(&contents)?;
@@ -337,16 +328,17 @@ pub fn get_config(config_file: &Option<PathBuf>) -> Result<Config> {
 // --------------------------------------------------
 pub fn run_cmd(mut cmd: Command) -> Result<process::Output> {
     let start = Instant::now();
-    let res = cmd.output()?;
-
-    if !res.status.success() {
-        bail!(String::from_utf8(res.stderr)?);
-    }
+    let res = cmd.output();
 
     debug!(
         "Command {cmd:?} finished in {}",
         format_seconds(start.elapsed().as_secs())
     );
+
+    let res = res?;
+    if !res.status.success() {
+        bail!(String::from_utf8(res.stderr)?);
+    }
 
     Ok(res)
 }
