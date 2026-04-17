@@ -1,6 +1,6 @@
 use crate::{
     common::{
-        copy_fasta, format_seconds, get_config, open, open_for_write,
+        copy_fasta, format_seconds, get_config, open_file, open_for_write,
         read_instances_dir, read_lines, run_blastp, run_cmd, run_rmblastn,
     },
     types::{
@@ -12,10 +12,10 @@ use anyhow::{anyhow, bail, Result};
 use bio::alphabets::dna::revcomp;
 use itertools::Itertools;
 use kseq::parse_reader;
+use lazy_regex::regex;
 use log::{debug, warn};
 use newick::Newick;
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
-use lazy_regex::regex;
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
@@ -341,7 +341,7 @@ pub fn cluster_component(
 
     let outfile = batch_dir.join("final.fa");
     let mut final_writer = FastaWriter::new(BufWriter::new(open_for_write(&outfile)?));
-    let mut reader = FastaReader::new(open(&batch_consensus)?);
+    let mut reader = FastaReader::new(open_file(&batch_consensus)?);
     let mut new_seqs = 0;
     let mut final_msa: HashMap<String, PathBuf> = HashMap::new();
     for result in reader.records() {
@@ -397,7 +397,7 @@ fn cat_sequences(
             continue;
         }
 
-        let mut reader = parse_reader(open(&file.path())?)?;
+        let mut reader = parse_reader(open_file(&file.path())?)?;
         while let Some(rec) = reader.iter_record()? {
             writeln!(
                 output,
@@ -498,9 +498,9 @@ fn msa_protein(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
     ]);
     let res = run_cmd(cmd)?;
 
-    let outdir = input_file
-        .parent()
-        .ok_or_else(|| anyhow!("Failed to get parent dir for {}", input_file.display()))?;
+    let outdir = input_file.parent().ok_or_else(|| {
+        anyhow!("Failed to get parent dir for {}", input_file.display())
+    })?;
 
     let msa_path = outdir.join("msa.fa");
     {
@@ -559,9 +559,9 @@ fn msa_dna(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
 
     let _ = run_cmd(cmd)?;
 
-    let outdir = input_file
-        .parent()
-        .ok_or_else(|| anyhow!("Failed to get parent dir for {}", input_file.display()))?;
+    let outdir = input_file.parent().ok_or_else(|| {
+        anyhow!("Failed to get parent dir for {}", input_file.display())
+    })?;
     let consensus_path = outdir.join("msa-input.fa.refiner_cons");
     let msa_path = outdir.join("msa-input.fa.refiner.stk");
     for path in [&consensus_path, &msa_path] {
@@ -570,7 +570,7 @@ fn msa_dna(input_file: &Path, num_threads: usize) -> Result<MsaResult> {
         }
     }
 
-    let mut reader = parse_reader(open(&consensus_path)?)?;
+    let mut reader = parse_reader(open_file(&consensus_path)?)?;
     let consensus_seq = reader
         .iter_record()?
         .map(|rec| rec.seq().to_string())
@@ -591,7 +591,7 @@ fn downsample(
     start_numbering_at: usize,
     mut output: impl Write,
 ) -> Result<usize> {
-    let mut reader = parse_reader(open(fasta)?)?;
+    let mut reader = parse_reader(open_file(fasta)?)?;
     let mut num_taken = 0;
 
     debug!(
@@ -736,7 +736,7 @@ fn extract_scores(
         prev_scores_file
     );
 
-    let mut reader = parse_reader(open(consensus_path)?)?;
+    let mut reader = parse_reader(open_file(consensus_path)?)?;
     let mut consensus_names: HashMap<String, String> = HashMap::new();
     while let Some(rec) = reader.iter_record()? {
         consensus_names
@@ -837,7 +837,7 @@ fn number_fasta(
     out_path: &PathBuf,
 ) -> Result<HashMap<String, String>> {
     let mut outfile = open_for_write(out_path)?;
-    let mut reader = parse_reader(open(in_path)?)?;
+    let mut reader = parse_reader(open_file(in_path)?)?;
     let mut seqs: HashMap<String, String> = HashMap::new();
     let mut i = 0;
 
@@ -1023,7 +1023,7 @@ mod tests {
         assert!(res.is_ok());
         assert!(outpath.exists());
 
-        let mut reader = parse_reader(open(&outpath)?)?;
+        let mut reader = parse_reader(open_file(&outpath)?)?;
         let mut count = 0;
         while (reader.iter_record()?).is_some() {
             count += 1;
