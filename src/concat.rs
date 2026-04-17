@@ -1,5 +1,5 @@
 use crate::{
-    common::{copy_fasta, open, open_for_write, read_lines},
+    common::{copy_fasta, open_file, open_for_write, read_lines},
     types::ConcatArgs,
 };
 use anyhow::{anyhow, bail, Result};
@@ -52,16 +52,19 @@ pub fn concat_files(args: &ConcatArgs) -> Result<()> {
         }
     }
 
+    let mut family_num = 1;
     for component_file in &args.components {
-        let component_dir = component_file
-            .parent()
-            .ok_or_else(|| anyhow!("Cannot get parent dir of '{}'", component_file.display()))?;
+        let component_dir = component_file.parent().ok_or_else(|| {
+            anyhow!("Cannot get parent dir of '{}'", component_file.display())
+        })?;
         debug!(r#"Copying from "{}""#, component_file.display());
-        let mut reader = FastaReader::new(BufReader::new(open(component_file)?));
-        for (record_num, result) in reader.records().enumerate() {
+
+        let mut reader = FastaReader::new(BufReader::new(open_file(component_file)?));
+        for result in reader.records() {
             let mut record = result?;
             let cur_family_name = String::from_utf8(record.name().to_vec())?;
-            let new_family_name = format!("sculufam-{}", record_num + 1);
+            let new_family_name = format!("sculufam-{}", family_num);
+            family_num += 1;
             record = FastaRecord::new(
                 FastaDefinition::new(
                     new_family_name.clone(),
