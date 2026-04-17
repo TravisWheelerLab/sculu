@@ -1,6 +1,6 @@
 use crate::{
     common::{
-        copy_fasta, format_seconds, get_config, open, open_for_write,
+        copy_fasta, format_seconds, get_config, open_file, open_for_write,
         read_instances_dir, run_blastp, run_rmblastn,
     },
     graph,
@@ -13,10 +13,10 @@ use crate::{
 use anyhow::{anyhow, bail, Result};
 use itertools::Itertools;
 use kseq::parse_reader;
+use lazy_regex::regex;
 use log::{debug, warn};
 use noodles_fasta::{self, io::Reader as FastaReader, io::Writer as FastaWriter};
 use rayon::prelude::*;
-use lazy_regex::regex;
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
@@ -145,7 +145,7 @@ fn check_family_instances(
         FastaWriter::new(BufWriter::new(open_for_write(&too_few_path)?));
     let taken_instances = read_instances_dir(args.taken_instances_dir)?;
     for (family_name, instance_path) in taken_instances {
-        let mut reader = FastaReader::new(open(&instance_path)?);
+        let mut reader = FastaReader::new(open_file(&instance_path)?);
         let num_taken = reader.records().count();
         if num_taken < min_num_instances {
             debug!(
@@ -181,7 +181,7 @@ fn check_family_instances(
         taken_consensus_path.display()
     );
 
-    let mut reader = parse_reader(open(args.consensus_path)?)?;
+    let mut reader = parse_reader(open_file(args.consensus_path)?)?;
     let mut consensus_names: HashMap<String, u32> = HashMap::new();
     while let Some(rec) = reader.iter_record()? {
         let family = rec.head().to_string();
@@ -386,7 +386,7 @@ pub fn align_consensus_to_self(
 // --------------------------------------------------
 fn select_instances(args: SelectInstancesArgs) -> Result<usize> {
     if args.to_path.is_file() {
-        let mut reader = FastaReader::new(open(args.to_path)?);
+        let mut reader = FastaReader::new(open_file(args.to_path)?);
         let num = reader.records().count();
         debug!("Reusing existing instance file: {}", args.to_path.display());
         return Ok(num);
@@ -416,7 +416,7 @@ fn select_instances(args: SelectInstancesArgs) -> Result<usize> {
     }
 
     // Get the length of the consensus
-    let mut reader = FastaReader::new(open(&db_path)?);
+    let mut reader = FastaReader::new(open_file(&db_path)?);
     let consensus_len = reader
         .records()
         .next()
@@ -530,7 +530,7 @@ fn select_instances(args: SelectInstancesArgs) -> Result<usize> {
 
     let mut num_taken = 0;
     if !wanted.is_empty() {
-        let mut reader = FastaReader::new(BufReader::new(open(args.from_path)?));
+        let mut reader = FastaReader::new(BufReader::new(open_file(args.from_path)?));
         let mut fasta_writer =
             FastaWriter::new(BufWriter::new(open_for_write(args.to_path)?));
         for record in reader.records().map_while(Result::ok) {
@@ -617,7 +617,7 @@ pub fn parse_alignment(blast_out: &PathBuf) -> Result<Vec<RmBlastOutput>> {
 }
 
 // --------------------------------------------------
-// Currently just assuming STK format, will the be OK for protein?
+// Currently just assuming STK format, will this be OK for protein?
 fn msa_to_fasta(
     input_dir: &PathBuf,
     seed_alignments_dir: &Path,
@@ -628,8 +628,6 @@ fn msa_to_fasta(
         fasta_dir.display()
     );
 
-    let entries = fs::read_dir(input_dir)
-        .map_err(|e| anyhow!(r#"Failed to read dir "{}": {e}"#, input_dir.display()))?;
     let comment = regex!(r"^#\s");
     let meta = regex!(r"^#=(\S{2})\s+(\S{2})\s+(.+)");
     let sequence = regex!(r"^(\S+)\s+(\S+)$");
@@ -639,10 +637,15 @@ fn msa_to_fasta(
     let mut out_file: Option<File> = None;
     let mut num_taken = 0;
 
-    for entry in entries {
-        let entry = entry?;
-        let mut file = open(&entry.path())?;
+    let entries = fs::read_dir(input_dir)
+        .map_err(|e| anyhow!(r#"Failed to read dir "{}": {e}"#, input_dir.display()))?;
+    for res in entries {
+        let entry = res?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
 
+        let mut file = open_file(&entry.path())?;
         loop {
             let mut buf = vec![];
             let bytes = file.read_until(b'\n', &mut buf)?;
@@ -696,7 +699,14 @@ fn msa_to_fasta(
         }
     }
 
-    Ok(num_taken)
+    if num_taken == 0 {
+        bail!(
+            r#"Failed to take any seed alignments from "{}""#,
+            input_dir.display()
+        )
+    } else {
+        Ok(num_taken)
+    }
 }
 
 // --------------------------------------------------
