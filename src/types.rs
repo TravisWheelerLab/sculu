@@ -1,6 +1,10 @@
 use clap::{builder::PossibleValue, Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fmt,
+    path::{Path, PathBuf},
+};
 
 /// SCULU subfamily clustering tool
 #[derive(Parser, Debug)]
@@ -364,4 +368,24 @@ pub struct MsaResult {
 pub struct ClusterResult {
     pub consensus_path: PathBuf,
     pub family_to_msa: HashMap<String, PathBuf>,
+}
+
+#[derive(Debug)]
+pub struct BlastParams<'a> {
+    pub out_dir: &'a PathBuf,
+    pub db: &'a Path,
+    pub query: &'a Path,
+    pub num_threads: usize,
+    pub db_type: &'static str,
+    pub executable: &'static str,
+    pub gap_open: usize,
+    pub gap_extend: usize,
+    pub word_size: usize,
+    pub mask_level: usize,
+    pub min_raw_gapped_score: usize,
+    pub dust: bool,
+    pub complexity_adjust: bool,
+    pub matrix: Option<&'a PathBuf>,
+    // rmblastn must run from out_dir so relative matrix paths resolve correctly
+    pub run_in_out_dir: bool,
 }
